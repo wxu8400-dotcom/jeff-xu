@@ -60,5 +60,5 @@
 
 ## 4. V2.0 新增可选环境变量（在 Render 环境变量页按需补充）
 
-1. **一键生图**：默认直接复用已配好的 `GEMINI_API_KEY`（无需新加任何 Key）；如需在网页切换 ChatGPT `gpt-image-1`，补充 `OPENAI_IMAGE_API_KEY`（或 `OPENAI_API_KEY`）与可选 `OPENAI_IMAGE_BASE_URL`。
+1. **一键生图**：默认直接复用已配好的 `GEMINI_API_KEY`（需开通 Google 计费）；如需在网页切换最新 **ChatGPT `gpt-image-2`**（兼容中转并自动降级 `gpt-image-1.5 / gpt-image-1`），补充 `OPENAI_IMAGE_API_KEY`（或 `OPENAI_API_KEY`）与可选 `OPENAI_IMAGE_BASE_URL`（以及可选 `IMAGE_PROVIDER=openai` 设为默认）。
 2. **可灵 Kling 一键图生视频**：官方开放平台填 `KLING_ACCESS_KEY` + `KLING_SECRET_KEY`（默认 `KLING_API_BASE_URL=https://api-beijing.klingai.com`）；若使用支付宝中转站，只需填 `KLING_API_KEY` + 中转站 `KLING_API_BASE_URL`。

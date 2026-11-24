@@ -214,7 +214,7 @@ class ConfigCheckOut(BaseModel):
     gemini_image_configured: bool = False
     gemini_image_model: str = "gemini-2.5-flash-image"
     openai_image_configured: bool = False
-    openai_image_model: str = "gpt-image-1"
+    openai_image_model: str = "gpt-image-2"
     kling_configured: bool = False
     kling_model_name: str = "kling-v2-master"
 

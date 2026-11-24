@@ -360,7 +360,7 @@ async def _generate_image_gemini(
     if quota_errors:
         raise RuntimeError(
             "当前 Google Gemini 免费版 API Key 的生图模型配额已用尽或为 0（Google 近期限制了部分免费 Key 的生图额度）。"
-            "解决办法：① 在 Google AI Studio 开启计费（按量几分钱一张）；或 ② 在 Render 环境变量填入 OPENAI_IMAGE_API_KEY 切换为 ChatGPT (gpt-image-1) 生图。"
+            "解决办法：① 在 Google AI Studio 开启计费（按量几分钱一张）；或 ② 在 Render 环境变量填入 OPENAI_IMAGE_API_KEY 切换为 ChatGPT (gpt-image-2) 生图。"
             f" 详情：{quota_errors[0]}"
         )
 
@@ -394,32 +394,81 @@ async def _generate_image_openai(
     api_key = cfg.resolved_openai_image_key()
     if not api_key:
         raise RuntimeError(
-            "尚未配置 OPENAI_IMAGE_API_KEY 或 OPENAI_API_KEY，请在 Render 环境变量中配置后使用 ChatGPT (gpt-image-1) 生图，或切换为 Gemini 生图。"
+            "尚未配置 OPENAI_IMAGE_API_KEY 或 OPENAI_API_KEY，请在 Render 环境变量中配置后使用 ChatGPT (gpt-image-2) 生图，或切换为 Gemini 生图。"
         )
     base_url = cfg.resolved_openai_image_base_url()
-    model_name = cfg.openai_image_model or "gpt-image-1"
     size = "1024x1536" if aspect_ratio == "9:16" else ("1536x1024" if aspect_ratio == "16:9" else "1024x1024")
     headers = {"Authorization": f"Bearer {api_key}"}
 
+    # Prioritize latest gpt-image-2, with automatic fallback if a relay only exposes earlier IDs
+    model_chain: list[str] = []
+    for m in (cfg.openai_image_model, "gpt-image-2", "gpt-image-1.5", "gpt-image-1"):
+        if m and m not in model_chain:
+            model_chain.append(m)
+
+    last_err = ""
     async with httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=15.0)) as client:
-        # Prefer /images/edits when product reference image is available so gpt-image-1 fuses the real product!
-        if ref_images:
-            try:
-                files = [
-                    ("image[]", (f"product_{i}.jpg", img_bytes, mime))
-                    for i, (img_bytes, mime) in enumerate(ref_images[:2])
+        for model_name in model_chain:
+            # 1) Prefer /images/edits when product reference image is available so GPT Image 2 fuses the real product!
+            if ref_images:
+                # Try both standard OpenAI `image[]` and single `image` field for maximum relay compatibility
+                field_variants = [
+                    [
+                        ("image[]", (f"product_{i}.jpg", img_bytes, mime))
+                        for i, (img_bytes, mime) in enumerate(ref_images[:2])
+                    ],
+                    [("image", ("product_0.jpg", ref_images[0][0], ref_images[0][1]))],
                 ]
-                data = {
-                    "model": model_name,
-                    "prompt": prompt,
-                    "size": size,
-                    "n": "1",
-                }
+                model_not_found = False
+                for files in field_variants:
+                    try:
+                        resp = await client.post(
+                            f"{base_url}/images/edits",
+                            headers=headers,
+                            data={
+                                "model": model_name,
+                                "prompt": prompt,
+                                "size": size,
+                                "n": "1",
+                            },
+                            files=files,
+                        )
+                        if resp.status_code == 200:
+                            raw_img = await _extract_openai_image_bytes(client, resp.json())
+                            if raw_img:
+                                opt_bytes, w, h = _optimize_generated_jpeg(raw_img)
+                                return GeneratedImageResult(
+                                    image_bytes=opt_bytes,
+                                    mime_type="image/jpeg",
+                                    width=w,
+                                    height=h,
+                                    provider="openai",
+                                    model_name=model_name,
+                                )
+                        txt = resp.text[:260]
+                        last_err = f"{model_name} /images/edits HTTP {resp.status_code}: {txt}"
+                        low = txt.lower()
+                        if resp.status_code == 404 or "model_not_found" in low or "does not exist" in low:
+                            model_not_found = True
+                            break
+                        logger.warning("%s (trying next field/fallback)", last_err)
+                    except Exception as exc:
+                        last_err = f"{model_name} /images/edits error: {exc}"
+                        logger.warning("%s", last_err)
+                if model_not_found:
+                    continue
+
+            # 2) Fallback to /images/generations
+            try:
                 resp = await client.post(
-                    f"{base_url}/images/edits",
-                    headers=headers,
-                    data=data,
-                    files=files,
+                    f"{base_url}/images/generations",
+                    headers={**headers, "Content-Type": "application/json"},
+                    json={
+                        "model": model_name,
+                        "prompt": prompt,
+                        "size": size,
+                        "n": 1,
+                    },
                 )
                 if resp.status_code == 200:
                     raw_img = await _extract_openai_image_bytes(client, resp.json())
@@ -433,39 +482,18 @@ async def _generate_image_openai(
                             provider="openai",
                             model_name=model_name,
                         )
-                logger.warning(
-                    "OpenAI /images/edits HTTP %s: %s (trying /images/generations fallback)",
-                    resp.status_code,
-                    resp.text[:240],
-                )
+                txt = resp.text[:260]
+                last_err = f"{model_name} /images/generations HTTP {resp.status_code}: {txt}"
+                low = txt.lower()
+                if resp.status_code == 404 or "model_not_found" in low or "does not exist" in low:
+                    continue
+                raise RuntimeError(f"OpenAI 生图接口返回错误：{last_err}")
+            except RuntimeError:
+                raise
             except Exception as exc:
-                logger.warning("OpenAI /images/edits error: %s (trying /images/generations fallback)", exc)
+                last_err = f"{model_name} error: {exc}"
 
-        # Fallback to /images/generations
-        resp = await client.post(
-            f"{base_url}/images/generations",
-            headers={**headers, "Content-Type": "application/json"},
-            json={
-                "model": model_name,
-                "prompt": prompt,
-                "size": size,
-                "n": 1,
-            },
-        )
-        if resp.status_code != 200:
-            raise RuntimeError(f"OpenAI 生图接口返回 HTTP {resp.status_code}：{resp.text[:300]}")
-        raw_img = await _extract_openai_image_bytes(client, resp.json())
-        if not raw_img:
-            raise RuntimeError("OpenAI 生图接口未返回有效图片数据")
-        opt_bytes, w, h = _optimize_generated_jpeg(raw_img)
-        return GeneratedImageResult(
-            image_bytes=opt_bytes,
-            mime_type="image/jpeg",
-            width=w,
-            height=h,
-            provider="openai",
-            model_name=model_name,
-        )
+    raise RuntimeError(f"OpenAI 一键生图失败：{last_err or '未返回有效图片数据'}")
 
 
 async def _extract_openai_image_bytes(

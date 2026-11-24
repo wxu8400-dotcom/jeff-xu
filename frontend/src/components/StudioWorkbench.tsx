@@ -518,7 +518,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
                     {studio.openai_image_configured ? "已就绪" : "需配 Key"}
                   </span>
                 </div>
-                <div className="text-[11px] opacity-80 mt-0.5">gpt-image-1 官方/中转</div>
+                <div className="text-[11px] opacity-80 mt-0.5">gpt-image-2 最新版 官方/中转</div>
               </button>
             </div>
           </div>
