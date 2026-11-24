@@ -36,10 +36,10 @@ class Settings(BaseSettings):
     gemini_api_key: str = Field(default="", alias="GEMINI_API_KEY")
     gemini_base_url: str = Field(default="", alias="GEMINI_BASE_URL")
     gemini_fast_model: str = Field(
-        default="gemini-2.5-flash-lite", alias="GEMINI_FAST_MODEL"
+        default="gemini-3.5-flash-lite", alias="GEMINI_FAST_MODEL"
     )
     gemini_deep_model: str = Field(
-        default="gemini-2.5-flash", alias="GEMINI_DEEP_MODEL"
+        default="gemini-3.5-flash", alias="GEMINI_DEEP_MODEL"
     )
 
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")

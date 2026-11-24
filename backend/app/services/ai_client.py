@@ -216,14 +216,39 @@ class UnifiedAIClient:
             response_mime_type="application/json",
         )
 
-        def _sync_call():
+        def _sync_call(target_model: str):
             return client.models.generate_content(
-                model=model_name,
+                model=target_model,
                 contents=parts,
                 config=config,
             )
 
-        resp = await asyncio.to_thread(_sync_call)
+        fallback_chain = (
+            [model_name, "gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3-flash-preview", "gemini-2.5-flash"]
+            if tier == "fast"
+            else [model_name, "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3-flash-preview", "gemini-2.5-flash"]
+        )
+        seen_models: list[str] = []
+        for m in fallback_chain:
+            if m and m not in seen_models:
+                seen_models.append(m)
+
+        resp = None
+        last_404: Exception | None = None
+        for idx, candidate_model in enumerate(seen_models):
+            try:
+                resp = await asyncio.to_thread(_sync_call, candidate_model)
+                break
+            except Exception as exc:
+                err_str = str(exc)
+                if ("404" in err_str or "NOT_FOUND" in err_str) and idx < len(seen_models) - 1:
+                    logger.warning("Gemini model %s unavailable (404), trying fallback...", candidate_model)
+                    last_404 = exc
+                    continue
+                raise
+        if resp is None:
+            assert last_404 is not None
+            raise last_404
         text = resp.text or ""
         usage_meta = getattr(resp, "usage_metadata", None)
         usage = TokenUsage(
