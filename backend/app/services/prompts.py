@@ -18,19 +18,19 @@ def build_product_dna_prompt(
         else "请从产品资料中提炼一个简短精准的中文产品名称（4~16字，适合作为历史记录分类名）"
     )
     if search_strategy == "same_category":
-        query_rules = """【搜索词生成策略：同品类 C 端高热模式】
-请为每个平台生成 3 个该品类在海外社媒（C端消费者视角）最火的英文短词（2~3词），严禁枯燥的 B2B 采购/批发词（如 wholesale / supplier / fixture / retrofit）。"""
+        query_rules = """【搜索词生成策略：同品类 C 端高热模式（仅真人实拍 / 写实 AI 真人）】
+请为每个平台生成 3 个该品类在海外社媒（C端消费者视角）最火的英文短词（2~3词），必须指向真人实拍或照片级写实 AI 真人短视频；严禁生成动漫/卡通/动画/定格动画相关词，也严禁枯燥的 B2B 采购/批发词（如 wholesale / supplier / fixture / retrofit）。"""
     elif search_strategy == "hybrid":
-        query_rules = """【搜索词生成策略：跨品类创意模板 + 同品类混合模式】
-每个平台生成 3 个英文短词：
-- 第 1、2 个词：跨品类爆款创意广告/AI视觉模板词（严禁带原产品品类词，例如 `ai product commercial`, `cgi product ad`, `fooh cgi advertising`, `3d product animation`, `creative commercial video`, `product popping out`）；
-- 第 3 个词：C 端泛品类高热视觉词（严禁 B2B 批发词）。"""
+        query_rules = """【搜索词生成策略：跨品类创意模板 + 同品类混合模式（仅真人实拍 / 写实 AI 真人）】
+每个平台生成 3 个英文短词（严禁任何动漫/卡通/animation/stop motion 词）：
+- 第 1、2 个词：跨品类真人实景或写实 AI 真人爆款创意广告词（严禁带原产品品类词，例如 `realistic ai commercial`, `viral commercial transition`, `fooh cgi street`, `luxury lifestyle commercial`）；
+- 第 3 个词：C 端泛品类真人实拍高热视觉词（严禁 B2B 批发词）。"""
     else:
-        query_rules = """【搜索词生成策略：纯跨品类爆款创意模板模式（产品完全解耦）】
-用户明确要求：**绝不照着上传的产品素材去搜同品类产品视频！** 系统将使用独立于上传产品的全网跨品类爆款视觉模板库（FOOH 户外巨物 CGI、3D 悬浮/画册弹出、AI 超现实商业大片、无缝创意转场、微缩世界、极简高级商业摄影）去抓取三平台爆款，然后在拆解阶段把原片里的主角物品替换为用户的产品。
+        query_rules = """【搜索词生成策略：纯跨品类爆款创意模板模式（产品完全解耦，仅真人/写实 AI 真人）】
+用户明确要求：**绝不照着上传的产品素材去搜同品类产品视频，也绝不要动漫/卡通/定格动画！** 系统将使用独立于上传产品的全网跨品类真人实拍与写实 AI 真人爆款视觉模板库去抓取三平台爆款，然后在拆解阶段把原片里的主角物品替换为用户的产品。
 因此：
 1. 你在本步骤的核心职责是**精准提炼产品外观、材质与卖点**（供后续替换分镜与 AI 提示词使用），以及**准确列出 `category_leak_keywords`**（该产品自身所属品类的中英文关键词，例如 LED 灯填 `["led", "light", "lighting", "lamp", "strip", "fixture", "灯", "灯具", "照明"]`），以便系统在搜索和初筛中彻底屏蔽同品类视频！
-2. `search_queries` 字段严禁出现任何与该产品品类相关的词，仅填写全网通用的跨品类爆款创意广告词（系统后续也会通过代码级白名单模板库进行二次强校验与替换）。"""
+2. `search_queries` 字段严禁出现任何与该产品品类或动漫/卡通相关的词，仅填写全网通用的真人/写实 AI 跨品类爆款创意广告词（系统后续也会通过代码级白名单模板库进行二次强校验与替换）。"""
 
     return f"""你是顶级海外社媒（TikTok / Instagram Reels / YouTube Shorts）爆款创意总监与 AI 商业广告专家。
 请结合用户上传的产品图片/视频关键帧与下方文字资料，提炼结构化的《产品基因卡（Product DNA）》，并制定高播放、高点赞的搜索词策略。
@@ -97,6 +97,16 @@ def build_preliminary_screening_prompt(
 
     return f"""你是顶级短视频创意总监，负责评估三平台高热视频的**「爆款画面创意价值」**与**「跨品类物品可替换性」**。
 
+【画风最高铁律 — 一票否决动漫/卡通/定格动画！（看封面图和标题严格把关！）】
+用户明确要求：**只搜索和收录「真人实拍」或「照片级写实 AI 真人」短视频，绝不要任何动漫、卡通或定格动画！**
+- **一票否决（必须标 `is_cartoon_or_animation: true`, `is_replaceable: false`, `preliminary_score: 0~20`）**：
+  1. 任何 2D 动漫、日漫/国漫、二次元、手绘/插画风动画（如 Animated by Hand、绘本风）；
+  2. 任何 3D 卡通人偶、皮克斯/迪士尼风格、塑料玩偶/公仔角色、黏土/泥塑定格动画（如 Wallace & Gromit、木偶、乐高、游戏建模风）；
+  3. 任何卡通化/非照片级写实画风——即使播放量几百万、大牌广告，也必须直接淘汰！
+- **优先高分收录（`is_cartoon_or_animation: false`, `has_realistic_human: true`）**：
+  - 真实人类出镜的实拍商业广告/生活种草/创意转场/剧情反转短片；
+  - 或具有真实皮肤纹理、真实相机光影的**照片级写实 AI 真人**短片（如 Kling/Sora/Veo 写实真人商业广告、街头实景 FOOH 真人反应大片）。
+
 {strategy_rules}
 
 目标产品信息（仅用于判断 `is_same_category` 与后续替换参考，切勿用其限制创意品类）：
@@ -106,10 +116,10 @@ def build_preliminary_screening_prompt(
 {user_instruction or "无"}
 
 评分标准（0~100分）：
-- **visual_creativity_score（画面创意爆款分）**：评估视频本身的视觉冲击力与创意稀缺度（FOOH 户外巨物 CGI / 3D 悬浮画册弹出 / AI 超现实大片 / 脑洞无缝转场 / 微缩世界定格动画 / 电影级商业摄影给 85~98 分；普通平铺直叙实拍给 50~70 分；无视觉创意给 0~45 分）。
-- **preliminary_score（可替换模板分）**：评估该视频是否存在清晰可替换的“主角物品槽位”，把原片主角物品替换成目标产品后能否复刻其爆款视觉结构。
+- **visual_creativity_score（画面创意爆款分）**：在满足「真人实拍 / 照片级写实 AI 真人」的前提下，评估视频的视觉冲击力与创意稀缺度（真人实景脑洞转场 / 街头真人 FOOH 巨物 CGI / 写实 AI 真人商业大片 / 电影级真人生活方式广告给 85~98 分；普通平铺直叙实拍给 55~72 分；动漫卡通或无创意给 0~25 分）。
+- **preliminary_score（可替换模板分）**：评估该真人/写实 AI 真人视频是否存在清晰可替换的“主角物品槽位”，把原片主角物品替换成目标产品后能否 1:1 复刻其情节与爆款视觉结构。
 
-候选视频列表（随附的封面图按 has_cover=true 的顺序一一对应）：
+候选视频列表（随附的封面图按 has_cover=true 的顺序一一对应，请务必仔细肉眼查看封面画风！）：
 {candidates_json}
 
 请严格输出纯 JSON，不要附加任何解释：
@@ -120,8 +130,10 @@ def build_preliminary_screening_prompt(
       "preliminary_score": 92,
       "visual_creativity_score": 94,
       "is_same_category": false,
-      "original_featured_item": "原视频核心展示物品（例如：巨型香水瓶、悬浮沙发、运动鞋、无线耳机；若无实物写'无明确实物'）",
-      "reason": "一句话说明原视频的爆款视觉创意元素是什么、如何把原物品替换成目标产品",
+      "is_cartoon_or_animation": false,
+      "has_realistic_human": true,
+      "original_featured_item": "原视频核心展示物品（例如：巨型香水瓶、真皮手袋、咖啡杯、无线耳机；若无实物写'无明确实物'）",
+      "reason": "一句话说明原视频的真人/写实AI画风与爆款视觉创意元素，以及如何替换为目标产品",
       "is_replaceable": true
     }}
   ]
@@ -147,7 +159,7 @@ def build_deep_analysis_prompt(
 【核心铁律：1:1 忠实复刻原爆款的情节、分镜与场景，绝不凭空编一个不一样的新视频！】
 用户的明确要求：
 1. **严格保留原视频的情节、分镜顺序、场景构图、镜头运动与转场节奏**——不能把原片魔改成一个完全不同的故事或无关场景！
-2. **人物脱敏换角（全片统一 AI 人物）**：如果原视频里出现人物（模特/路人/主播/手部主角），**绝不能照搬原片真人的脸**，但必须保留这个人物在原片里的**相同情节动作与站位**，并将其替换为一个**全新的原创 AI 人物形象**（在 `director_plan.ai_character_profile_cn` 与 `ai_character_profile_en` 中明确写清年龄、性别、长相气质、发型、服装穿搭，并在每一个有人物出现的分镜提示词中 100% 复用这个完全一致的 AI 人物设定！若原片全程无人，则这两个字段写“无人物（纯静物/场景）”）。
+2. **人物脱敏换角（全片统一写实 AI 真人）**：如果原视频里出现人物（模特/路人/主播/手部主角），**绝不能照搬原片真人的脸**，也**绝不能做成动漫/卡通/3D玩偶画风**；必须保留这个人物在原片里的**相同情节动作与站位**，并将其替换为一个**全新的、100% 照片级写实真人质感的原创 AI 人物形象**（在 `director_plan.ai_character_profile_cn` 与 `ai_character_profile_en` 中明确写清年龄、性别、真实肤质长相气质、发型、服装穿搭，并在每一个有人物出现的分镜提示词中 100% 复用这个完全一致的写实 AI 真人设定，英文提示词必须包含 `photorealistic real human, natural skin texture, live-action cinema photography, NOT cartoon, NOT anime, NOT 3D doll`！若原片全程无人，则这两个字段写“无人物（纯静物/场景）”）。
 3. **像专业导演一样给用户「替换与改写意见」**：
    - 先用 `director_plan.original_plot_summary` 客观还原原爆款视频到底讲了什么情节、每一镜发生什么；
    - 在 `director_plan.product_placement_plan` 里清楚建议：用户的目标产品应该**安排在第几镜出场最自然**、哪些镜头**1:1 原样保留原片场景和情节（`replication_action: "keep_scene"`）**、哪些镜头把原物品**直接替换为目标产品（`replication_action: "insert_product"`）**、哪些镜头因产品属性差异**建议适度微调改写场景（`replication_action: "rewrite_scene"`）**；

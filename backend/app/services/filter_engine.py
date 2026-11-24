@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
 from .collectors.base import CandidateVideo
+from .viral_templates import is_cartoon_or_animation_text
 
 
 @dataclass
@@ -63,10 +64,14 @@ def run_hard_filter(
     raw_list = list(candidates)
     seen: set[tuple[str, str]] = set()
     deduped: list[CandidateVideo] = []
+    excluded_cartoon = 0
     for cand in raw_list:
         key = (cand.platform.lower(), str(cand.platform_video_id))
         if key not in seen:
             seen.add(key)
+            if is_cartoon_or_animation_text(cand.title, cand.caption):
+                excluded_cartoon += 1
+                continue
             deduped.append(cand)
 
     def _apply(v_min: int, l_min: int, days: int) -> list[CandidateVideo]:
@@ -86,7 +91,12 @@ def run_hard_filter(
 
     filtered = _apply(min_views, min_likes, date_range_days)
     relaxed = False
-    note = f"严格阈值（播放 ≥ {min_views:,}，点赞 ≥ {min_likes:,}）筛选后保留 {len(filtered)} 条"
+    cartoon_suffix = (
+        f"（已自动屏蔽 {excluded_cartoon} 条动漫/卡通/定格动画视频）"
+        if excluded_cartoon > 0
+        else ""
+    )
+    note = f"严格阈值（播放 ≥ {min_views:,}，点赞 ≥ {min_likes:,}）筛选后保留 {len(filtered)} 条{cartoon_suffix}"
 
     if auto_relax and len(filtered) < max(target_count, 3):
         for factor, day_mult in [(0.7, 1.5), (0.4, 2.5), (0.0, 0)]:
@@ -98,7 +108,7 @@ def run_hard_filter(
                 filtered = attempt
                 relaxed = True
                 note = (
-                    f"严格阈值下候选较少，已自动放宽至（播放 ≥ {relaxed_v:,}，点赞 ≥ {relaxed_l:,}）保留 {len(filtered)} 条"
+                    f"严格阈值下候选较少，已自动放宽至（播放 ≥ {relaxed_v:,}，点赞 ≥ {relaxed_l:,}）保留 {len(filtered)} 条{cartoon_suffix}"
                 )
             if len(filtered) >= max(target_count * 2, 6):
                 break

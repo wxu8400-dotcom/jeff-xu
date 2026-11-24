@@ -19,66 +19,156 @@ class CreativeStyleSpec:
 
 
 # Battle-tested, 100% product-agnostic viral visual template queries per platform.
-# Instagram queries are intentionally concise so both search_reels and no-space hashtag fallback hit huge pools.
+# Strictly targets LIVE-ACTION REAL PERSON & PHOTOREALISTIC AI HUMAN commercials (ZERO anime/cartoon/stop-motion).
 CREATIVE_STYLE_BANK: dict[str, CreativeStyleSpec] = {
     "fooh_cgi": CreativeStyleSpec(
         id="fooh_cgi",
-        label="FOOH 户外巨物 CGI",
+        label="FOOH 街头真人实景 CGI",
         hints=("fooh", "巨物", "户外", "街头", "地标", "giant", "fake out of home", "cgi"),
-        tiktok=("fooh cgi", "giant cgi ad", "fake out of home", "cgi advertising"),
-        instagram=("fooh", "cgiadvertising", "fakeoutofhome", "fooh cgi"),
-        youtube=("fooh cgi commercial", "giant cgi ad shorts", "fake out of home cgi"),
+        tiktok=("fooh cgi street", "giant cgi ad real life", "fake out of home street", "fooh viral ad"),
+        instagram=("fooh", "cgiadvertising", "fakeoutofhome", "fooh street"),
+        youtube=("fooh cgi street shorts", "giant cgi ad real life shorts", "fake out of home viral shorts"),
     ),
     "3d_popout": CreativeStyleSpec(
         id="3d_popout",
-        label="3D 悬浮 / 画册弹出",
+        label="实景 3D 悬浮 / 特效弹出",
         hints=("3d", "悬浮", "画册", "杂志", "弹出", "pop out", "floating", "levitat", "变形", "book"),
-        tiktok=("3d product animation", "cgi product reveal", "3d floating ad", "surreal product ad"),
-        instagram=("3dproductanimation", "cgiad", "3dcommercial", "3d product reveal"),
-        youtube=("3d product animation commercial", "cgi product reveal shorts", "satisfying 3d commercial"),
+        tiktok=("cgi product reveal real life", "vfx product reveal", "live action cgi ad", "photorealistic cgi ad"),
+        instagram=("cgiad", "vfxcommercial", "3dcommercial", "cgi product reveal"),
+        youtube=("live action cgi commercial shorts", "vfx product reveal shorts", "photorealistic cgi ad shorts"),
     ),
     "ai_commercial": CreativeStyleSpec(
         id="ai_commercial",
-        label="AI 超现实大片",
-        hints=("ai", "可灵", "kling", "sora", "runway", "veo", "超现实", "surreal", "ai广告"),
-        tiktok=("ai commercial ad", "kling ai commercial", "ai product commercial", "viral ai ad"),
-        instagram=("aicommercial", "aiadvertising", "aiproductvideo", "ai commercial"),
-        youtube=("ai commercial video shorts", "ai product commercial", "kling ai commercial shorts"),
+        label="写实 AI 真人大片",
+        hints=("ai", "可灵", "kling", "sora", "runway", "veo", "超现实", "surreal", "ai广告", "ai真人"),
+        tiktok=("realistic ai commercial", "kling ai commercial", "ai realistic human ad", "viral ai commercial"),
+        instagram=("aicommercial", "aiadvertising", "realisticai", "klingai"),
+        youtube=("realistic ai commercial shorts", "kling ai commercial shorts", "photorealistic ai ad shorts"),
     ),
     "vfx_transition": CreativeStyleSpec(
         id="vfx_transition",
-        label="无缝转场 / 脑洞运镜",
-        hints=("转场", "运镜", "vfx", "特效", "脑洞", "transition", "match cut", "创意拍摄", "大片"),
-        tiktok=("creative commercial transition", "vfx product ad", "mind blowing commercial", "creative product shoot"),
-        instagram=("creativecommercial", "commercialtransitions", "vfxcommercial", "productvideography"),
-        youtube=("creative commercial behind the scenes", "viral commercial transition shorts", "creative product video shorts"),
+        label="真人无缝转场 / 脑洞运镜",
+        hints=("转场", "运镜", "vfx", "特效", "脑洞", "transition", "match cut", "创意拍摄", "大片", "真人"),
+        tiktok=("creative commercial transition", "viral product commercial", "mind blowing transition ad", "creative lifestyle shoot"),
+        instagram=("creativecommercial", "commercialtransitions", "productvideography", "cinematicreel"),
+        youtube=("viral commercial transition shorts", "creative product shoot behind the scenes shorts", "live action creative ad shorts"),
     ),
     "miniature_world": CreativeStyleSpec(
         id="miniature_world",
-        label="微缩世界 / 定格动画",
-        hints=("微缩", "小人国", "定格", "miniature", "tiny", "stop motion", "微观", "积木"),
-        tiktok=("miniature product ad", "tiny workers cgi", "stop motion commercial", "miniature commercial"),
-        instagram=("miniaturecommercial", "stopmotionad", "tinyworld", "miniature ad"),
-        youtube=("miniature product commercial", "tiny workers ai commercial", "stop motion product ad"),
+        label="写实微缩小人国",
+        hints=("微缩", "小人国", "miniature", "tiny", "微观"),
+        tiktok=("realistic tiny workers ai", "photorealistic miniature ad", "ai tiny people commercial", "miniature cgi real life"),
+        instagram=("miniaturecommercial", "tinyworkers", "aiminiature", "miniature cgi"),
+        youtube=("realistic tiny workers ai shorts", "photorealistic miniature commercial shorts", "ai tiny people ad shorts"),
     ),
     "luxury_aesthetic": CreativeStyleSpec(
         id="luxury_aesthetic",
-        label="极简高级美学大片",
+        label="真人高级生活方式大片",
         hints=("极简", "高级", "美学", "奢华", "luxury", "minimalist", "aesthetic", "质感", "电影感"),
-        tiktok=("luxury commercial ad", "viral ad concept", "creative brand ad", "aesthetic commercial"),
-        instagram=("luxurycommercial", "creativeadvertising", "brandcommercial", "commercialfilm"),
-        youtube=("best creative commercial shorts", "luxury product commercial", "viral ad idea shorts"),
+        tiktok=("luxury lifestyle commercial", "viral brand commercial", "cinematic lifestyle ad", "aesthetic product reel"),
+        instagram=("luxurycommercial", "brandcommercial", "commercialfilm", "lifestylecommercial"),
+        youtube=("luxury lifestyle commercial shorts", "cinematic real life ad shorts", "viral live action commercial shorts"),
     ),
 }
 
 DEFAULT_STYLE_ORDER: tuple[str, ...] = (
+    "vfx_transition",
+    "luxury_aesthetic",
+    "ai_commercial",
     "fooh_cgi",
     "3d_popout",
-    "vfx_transition",
-    "ai_commercial",
     "miniature_world",
-    "luxury_aesthetic",
 )
+
+# Strict blocklist to eliminate 2D/3D cartoons, anime, claymation, stop-motion puppets,
+# hand-drawn illustrations, and stylized game/doll animations at zero token cost.
+_NON_REALISTIC_EN_TERMS: tuple[str, ...] = (
+    "anime",
+    "cartoon",
+    "cartoons",
+    "animated",
+    "animation",
+    "claymation",
+    "stop motion",
+    "stop-motion",
+    "stopmotion",
+    "wallace & gromit",
+    "wallace and gromit",
+    "gromit",
+    "pixar",
+    "disney",
+    "dreamworks",
+    "ghibli",
+    "manga",
+    "chibi",
+    "vtuber",
+    "hand-drawn",
+    "hand drawn",
+    "drawn by hand",
+    "animated by hand",
+    "2d animation",
+    "3d animation",
+    "puppet",
+    "muppet",
+    "plushie",
+    "lego",
+    "minecraft",
+    "roblox",
+    "fortnite",
+    "gacha",
+    "toon",
+    "comic",
+    "caricature",
+    "barbie",
+    "clay figure",
+    "stopmotionad",
+)
+
+_NON_REALISTIC_ZH_TERMS: tuple[str, ...] = (
+    "动漫",
+    "动画",
+    "二次元",
+    "卡通",
+    "手绘",
+    "定格动画",
+    "粘土",
+    "黏土",
+    "泥塑",
+    "木偶",
+    "布偶",
+    "皮克斯",
+    "迪士尼",
+    "漫画",
+    "国漫",
+    "日漫",
+    "番剧",
+    "绘本",
+    "公仔动画",
+    "动画片",
+    "纸片人",
+)
+
+
+def is_cartoon_or_animation_text(title: str = "", caption: str = "") -> bool:
+    """Zero-token deterministic detector for cartoons, anime, claymation, stop-motion,
+    hand-drawn films, and stylized doll/game animations."""
+    combined = f"{title or ''} {caption or ''}".strip().lower()
+    if not combined:
+        return False
+
+    for zh in _NON_REALISTIC_ZH_TERMS:
+        if zh in combined:
+            return True
+
+    words = set(re.findall(r"[a-z0-9]+", combined))
+    for term in _NON_REALISTIC_EN_TERMS:
+        if " " in term or "-" in term or "&" in term:
+            if term in combined:
+                return True
+        else:
+            if term in words:
+                return True
+    return False
 
 # Bilingual category synonym expansion for strict product-leak prevention in cross_category mode.
 _CATEGORY_SYNONYM_GROUPS: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
@@ -358,9 +448,9 @@ def _pick_cross_category_queries_for_platform(
             if len(picked) >= count:
                 break
 
-    # Absolute fallback (never uses product category)
+    # Absolute fallback (never uses product category or animation/cartoon terms)
     if len(picked) < count:
-        for fallback_q in ("fooh cgi", "3d product animation", "creative commercial"):
+        for fallback_q in ("realistic ai commercial", "viral commercial transition", "luxury lifestyle commercial"):
             if len(picked) >= count:
                 break
             if fallback_q not in seen:

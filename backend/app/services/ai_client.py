@@ -606,6 +606,8 @@ class UnifiedAIClient:
                         preliminary_score=score,
                         visual_creativity_score=creativity,
                         is_same_category=False,
+                        is_cartoon_or_animation=False,
+                        has_realistic_human=True,
                         original_featured_item=item_name,
                         reason=reason,
                         is_replaceable=ok,

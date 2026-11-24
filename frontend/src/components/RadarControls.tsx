@@ -29,12 +29,12 @@ const PLATFORMS = [
 ];
 
 const CREATIVE_STYLES = [
-  { id: "fooh_cgi", label: "FOOH 户外巨物 CGI" },
-  { id: "3d_popout", label: "3D 悬浮 / 画册弹出" },
-  { id: "ai_commercial", label: "AI 超现实大片" },
-  { id: "vfx_transition", label: "无缝转场 / 脑洞运镜" },
-  { id: "miniature_world", label: "微缩世界 / 定格动画" },
-  { id: "luxury_aesthetic", label: "极简高级美学" },
+  { id: "vfx_transition", label: "真人无缝转场 / 脑洞运镜" },
+  { id: "luxury_aesthetic", label: "真人高级生活方式大片" },
+  { id: "ai_commercial", label: "写实 AI 真人大片" },
+  { id: "fooh_cgi", label: "FOOH 街头真人实景 CGI" },
+  { id: "3d_popout", label: "实景 3D 悬浮 / 特效弹出" },
+  { id: "miniature_world", label: "写实微缩小人国" },
 ];
 
 export const RadarControls: React.FC<Props> = ({
@@ -116,6 +116,9 @@ export const RadarControls: React.FC<Props> = ({
                 </button>
               );
             })}
+            <span className="px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-[11px] font-medium">
+              ✓ 仅搜真人 / 写实 AI 真人（自动屏蔽动漫卡通）
+            </span>
           </div>
 
           {/* Search Strategy Selector */}

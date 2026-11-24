@@ -30,6 +30,8 @@ class PreliminaryScreeningItem(BaseModel):
     preliminary_score: int = Field(ge=0, le=100)
     visual_creativity_score: int = Field(ge=0, le=100, default=75)
     is_same_category: bool = False
+    is_cartoon_or_animation: bool = False
+    has_realistic_human: bool = True
     original_featured_item: str = ""
     reason: str = ""
     is_replaceable: bool = False

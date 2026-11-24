@@ -31,6 +31,7 @@ from .prompts import (
 )
 from .video_processor import download_and_compress_video
 from .viral_templates import (
+    is_cartoon_or_animation_text,
     item_matches_same_category,
     normalize_creative_styles,
     resolve_platform_queries,
@@ -593,6 +594,8 @@ class _ScreenedCandidate:
         "is_same_category",
         "is_replaceable",
         "original_featured_item",
+        "is_cartoon_or_animation",
+        "has_realistic_human",
     )
 
     def __init__(
@@ -604,6 +607,8 @@ class _ScreenedCandidate:
         is_same_category: bool,
         is_replaceable: bool,
         original_featured_item: str,
+        is_cartoon_or_animation: bool = False,
+        has_realistic_human: bool = True,
     ) -> None:
         self.candidate = candidate
         self.preliminary_score = preliminary_score
@@ -611,6 +616,8 @@ class _ScreenedCandidate:
         self.is_same_category = is_same_category
         self.is_replaceable = is_replaceable
         self.original_featured_item = original_featured_item
+        self.is_cartoon_or_animation = is_cartoon_or_animation
+        self.has_realistic_human = has_realistic_human
 
     @property
     def composite_score(self) -> int:
@@ -626,17 +633,23 @@ def select_candidates_for_deep_analysis(
 ) -> tuple[list[tuple[CandidateVideo, int, str]], int]:
     """Select top candidates for Stage 4 deep analysis.
 
+    Always strictly excludes cartoons / anime / 3D dolls / claymation / stop-motion,
+    prioritizing live-action real-person and photorealistic AI human short videos.
+
     In `cross_category` mode:
     - Strictly filters out candidates whose original featured item belongs to the same
       category as the uploaded product (both via AI flag and deterministic item check).
-    - Ranks by combined viral visual creativity + replaceability score.
+    - Ranks by realistic-human preference + combined viral visual creativity & replaceability score.
     - Balances across platforms (round-robin top from each platform first) so multi-platform
       scans don't get monopolized by a single platform.
     """
     qualified = [
         sc
         for sc in scored_candidates
-        if sc.preliminary_score >= 60 and sc.is_replaceable
+        if sc.preliminary_score >= 60
+        and sc.is_replaceable
+        and not sc.is_cartoon_or_animation
+        and not is_cartoon_or_animation_text(sc.candidate.title, sc.candidate.caption)
     ]
     excluded_same_cat = 0
 
@@ -658,9 +671,23 @@ def select_candidates_for_deep_analysis(
         return [], excluded_same_cat
 
     rank_key = (
-        (lambda sc: (sc.composite_score, sc.preliminary_score, sc.candidate.views))
+        (
+            lambda sc: (
+                1 if sc.has_realistic_human else 0,
+                sc.composite_score,
+                sc.preliminary_score,
+                sc.candidate.views,
+            )
+        )
         if search_strategy == "cross_category"
-        else (lambda sc: (sc.preliminary_score, sc.visual_creativity_score, sc.candidate.views))
+        else (
+            lambda sc: (
+                1 if sc.has_realistic_human else 0,
+                sc.preliminary_score,
+                sc.visual_creativity_score,
+                sc.candidate.views,
+            )
+        )
     )
 
     by_platform: dict[str, list[_ScreenedCandidate]] = {}
@@ -773,6 +800,8 @@ async def _screen_replaceability(
                         is_same_category=item.is_same_category,
                         is_replaceable=item.is_replaceable,
                         original_featured_item=item.original_featured_item,
+                        is_cartoon_or_animation=item.is_cartoon_or_animation,
+                        has_realistic_human=item.has_realistic_human,
                     )
                 )
 

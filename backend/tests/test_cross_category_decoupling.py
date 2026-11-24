@@ -193,3 +193,96 @@ def test_stage3_selection_strictly_excludes_same_category_and_balances_platforms
     # Multi-platform diversity: 1 TikTok + 1 Instagram + 1 YouTube!
     selected_platforms = {c.platform for c, _, _ in selected}
     assert selected_platforms == {"tiktok", "instagram", "youtube"}
+
+
+def test_real_person_and_photorealistic_ai_only_blocks_cartoons_and_animations():
+    from app.services.filter_engine import run_hard_filter
+    from app.services.viral_templates import is_cartoon_or_animation_text
+
+    # 1. Zero-token keyword detector catches real examples from screenshot + Chinese anime terms
+    assert is_cartoon_or_animation_text('Prada Holiday 2026 | "Drawing Prada: Animated by Hand"') is True
+    assert is_cartoon_or_animation_text("Barbour x Wallace & Gromit | Barbour Christmas Film 2026") is True
+    assert is_cartoon_or_animation_text("爆款二次元动漫风格广告") is True
+    assert is_cartoon_or_animation_text("Luxury Real Person Lifestyle Commercial Transition") is False
+    assert is_cartoon_or_animation_text("Photorealistic Kling AI Human Commercial") is False
+
+    # 2. Stage 2 Hard Filter strips cartoons BEFORE AI screening (even with huge views and auto_relax=True)
+    candidates = [
+        CandidateVideo(
+            platform="youtube",
+            platform_video_id="prada_anim",
+            video_url="https://youtube.com/shorts/prada_anim",
+            title='Prada Holiday 2026 | "Drawing Prada: Animated by Hand"',
+            views=4_310_000,
+            likes=173_000,
+            duration_sec=30,
+        ),
+        CandidateVideo(
+            platform="youtube",
+            platform_video_id="barbour_clay",
+            video_url="https://youtube.com/shorts/barbour_clay",
+            title="Barbour x Wallace & Gromit | Barbour Christmas Film 2026",
+            views=1_355_000,
+            likes=54_000,
+            duration_sec=30,
+        ),
+        CandidateVideo(
+            platform="tiktok",
+            platform_video_id="real_human_1",
+            video_url="https://tiktok.com/@brand/video/real_human_1",
+            title="Viral Real Person Luxury Transition Commercial",
+            views=820_000,
+            likes=41_000,
+            duration_sec=18,
+        ),
+    ]
+    out = run_hard_filter(candidates, min_views=50_000, min_likes=2_000, target_count=3, auto_relax=True)
+    assert [c.platform_video_id for c in out.selected] == ["real_human_1"]
+
+    # 3. Stage 3 Selection strictly rejects visual-flagged 3D cartoon dolls (e.g. e.l.f.) even with high score
+    dna = _led_dna_with_leaky_llm_queries()
+    elf_doll = CandidateVideo(
+        platform="youtube",
+        platform_video_id="elf_doll",
+        video_url="https://youtube.com/shorts/elf_doll",
+        title="e.l.f. Made To Stand Out",
+        views=910_000,
+        likes=36_000,
+    )
+    real_ai = CandidateVideo(
+        platform="tiktok",
+        platform_video_id="real_ai_human",
+        video_url="https://tiktok.com/@a/video/real_ai_human",
+        title="Photorealistic AI Woman Commercial Reveal",
+        views=600_000,
+        likes=28_000,
+    )
+    selected, _ = select_candidates_for_deep_analysis(
+        scored_candidates=[
+            _ScreenedCandidate(
+                candidate=elf_doll,
+                preliminary_score=95,
+                visual_creativity_score=95,
+                is_same_category=False,
+                is_replaceable=True,
+                original_featured_item="化妆品",
+                is_cartoon_or_animation=True,
+                has_realistic_human=False,
+            ),
+            _ScreenedCandidate(
+                candidate=real_ai,
+                preliminary_score=88,
+                visual_creativity_score=90,
+                is_same_category=False,
+                is_replaceable=True,
+                original_featured_item="时尚手袋",
+                is_cartoon_or_animation=False,
+                has_realistic_human=True,
+            ),
+        ],
+        product_dna=dna,
+        search_strategy="cross_category",
+        target_count=3,
+    )
+    assert [c.platform_video_id for c, _, _ in selected] == ["real_ai_human"]
+
