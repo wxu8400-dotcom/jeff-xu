@@ -41,6 +41,7 @@ const DEFAULT_PARAMS: RadarFormParams = {
 
 export default function App() {
   const [auth, setAuth] = useState<AuthStatus | null>(null);
+  const [bootError, setBootError] = useState<string>("");
   const [config, setConfig] = useState<ConfigCheck | null>(null);
 
   const [history, setHistory] = useState<ScanSessionSummary[]>([]);
@@ -78,6 +79,7 @@ export default function App() {
 
   const bootstrap = useCallback(async () => {
     try {
+      setBootError("");
       const status = await api.authStatus();
       setAuth(status);
       if (status.authenticated) {
@@ -85,8 +87,17 @@ export default function App() {
         setConfig(cfg);
         setHistory(list);
       }
-    } catch {
-      setAuth({ password_required: false, authenticated: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "连接服务器失败";
+      if (msg.includes("401")) {
+        setAuth({ password_required: true, authenticated: false });
+      } else {
+        // During Render deploy restarts, keep retrying instead of rendering an empty broken page
+        setBootError(`服务器正在更新或唤醒中（${msg}），3 秒后自动重连...`);
+        setTimeout(() => {
+          bootstrap();
+        }, 3000);
+      }
     }
   }, []);
 
@@ -213,8 +224,19 @@ export default function App() {
 
   if (!auth) {
     return (
-      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400 text-sm">
-        正在连接雷达引擎...
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center gap-3 px-4 text-center">
+        <div className="text-slate-300 text-sm">
+          {bootError || "正在连接雷达引擎..."}
+        </div>
+        {bootError && (
+          <button
+            type="button"
+            onClick={bootstrap}
+            className="px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-xs"
+          >
+            立即重试连接
+          </button>
+        )}
       </div>
     );
   }
