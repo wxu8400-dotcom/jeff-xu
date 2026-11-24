@@ -50,29 +50,38 @@ class YouTubeOfficialCollector(BaseCollector):
         video_ids: list[str] = []
         async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=10.0)) as client:
             for q in queries[:3]:
-                try:
-                    resp = await client.get(
-                        "https://www.googleapis.com/youtube/v3/search",
-                        params={
-                            "part": "id",
-                            "q": f"{q} #shorts",
-                            "type": "video",
-                            "videoDuration": "short",
-                            "order": "viewCount",
-                            "maxResults": min(limit_per_query, 15),
-                            "publishedAfter": published_after,
-                            "key": self.api_key,
-                        },
-                    )
-                    if resp.status_code != 200:
-                        logger.warning("YouTube search API HTTP %s", resp.status_code)
-                        continue
-                    for item in resp.json().get("items", []):
-                        vid = (item.get("id") or {}).get("videoId")
-                        if vid and vid not in video_ids:
-                            video_ids.append(vid)
-                except Exception as exc:
-                    logger.warning("YouTube search failed for '%s': %s", q, exc)
+                for use_date_filter in (True, False):
+                    params = {
+                        "part": "id",
+                        "q": q,
+                        "type": "video",
+                        "videoDuration": "short",
+                        "order": "viewCount",
+                        "maxResults": min(limit_per_query, 15),
+                        "key": self.api_key,
+                    }
+                    if use_date_filter and date_range_days > 0:
+                        params["publishedAfter"] = published_after
+                    try:
+                        resp = await client.get(
+                            "https://www.googleapis.com/youtube/v3/search",
+                            params=params,
+                        )
+                        if resp.status_code != 200:
+                            logger.warning("YouTube search API HTTP %s: %s", resp.status_code, resp.text[:200])
+                            break
+                        items = resp.json().get("items", [])
+                        added = 0
+                        for item in items:
+                            vid = (item.get("id") or {}).get("videoId")
+                            if vid and vid not in video_ids:
+                                video_ids.append(vid)
+                                added += 1
+                        if added >= 3 or not use_date_filter:
+                            break
+                    except Exception as exc:
+                        logger.warning("YouTube search failed for '%s': %s", q, exc)
+                        break
 
             if not video_ids:
                 return []

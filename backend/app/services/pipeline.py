@@ -283,13 +283,18 @@ async def run_radar_pipeline(
                 warnings=stats["warnings"],
             )
             stats["collected"] = len(collected)
+            plat_counts: dict[str, int] = {}
+            for c in collected:
+                plat_counts[c.platform] = plat_counts.get(c.platform, 0) + 1
+            stats["platform_counts"] = plat_counts
+            plat_summary = " / ".join(f"{k.upper()}:{v}条" for k, v in plat_counts.items()) or "无"
 
             if not collected:
                 _update_session(
                     session_id,
                     status="completed",
                     progress_percent=100,
-                    progress_message="未搜索到候选视频，请检查 TikHub API Key 配置或调整搜索关键词。",
+                    progress_message="未搜索到候选视频，请检查 TikHub 余额/API Key 或查看上方提示信息。",
                     funnel_stats=stats,
                 )
                 return
@@ -299,7 +304,7 @@ async def run_radar_pipeline(
                 session_id,
                 status="filtering",
                 progress_percent=42,
-                progress_message=f"阶段 3/5：已抓取 {len(collected)} 条原始视频，正在执行 0-Token 播放/点赞硬过滤...",
+                progress_message=f"阶段 3/5：已抓取 {len(collected)} 条（{plat_summary}），正在执行 0-Token 播放/点赞过滤...",
                 funnel_stats=stats,
             )
             target_count = max(1, min(int(filter_config.get("target_count", 5)), 10))
@@ -343,8 +348,8 @@ async def run_radar_pipeline(
             )
             _sync_tokens()
 
-            # Strictly drop videos with score < 65
-            qualified = [x for x in scored_candidates if x[1] >= 65]
+            # Keep cross-category replaceable videos (score >= 60)
+            qualified = [x for x in scored_candidates if x[1] >= 60]
             qualified.sort(key=lambda x: x[1], reverse=True)
             selected_for_deep = qualified[:target_count]
             stats["after_screening"] = len(selected_for_deep)
@@ -354,7 +359,7 @@ async def run_radar_pipeline(
                     session_id,
                     status="completed",
                     progress_percent=100,
-                    progress_message="本轮候选视频的可替换性评分均低于 65 分，已自动过滤避免无效收录。建议补充产品使用场景后重扫。",
+                    progress_message=f"已抓取 {stats['collected']} 条（{plat_summary}），但本轮初筛最高可替换分均低于 60 分。建议在「雷达指令」里指定想要参考的创意风格（如 AI悬浮/画册弹出/空间改造）重试。",
                     funnel_stats=stats,
                 )
                 return

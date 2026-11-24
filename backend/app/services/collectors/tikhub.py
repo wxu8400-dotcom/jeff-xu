@@ -153,6 +153,10 @@ class TikHubCollector(BaseCollector):
     ) -> list[CandidateVideo]:
         endpoints = [
             (
+                "/api/v1/tiktok/app/v3/fetch_video_search_result",
+                {"keyword": query, "offset": 0, "count": limit, "sort_type": 1},
+            ),
+            (
                 "/api/v1/tiktok/app/v3/fetch_general_search_result",
                 {"keyword": query, "offset": 0, "count": limit, "sort_type": 1},
             ),
@@ -174,22 +178,30 @@ class TikHubCollector(BaseCollector):
         candidates: list[CandidateVideo] = []
         raw_items: list[dict[str, Any]] = []
 
-        data = payload.get("data") or payload
-        if isinstance(data, dict):
-            for key in ("data", "aweme_list", "item_list", "search_item_list", "videos"):
-                val = data.get(key)
-                if isinstance(val, list):
-                    raw_items.extend([x for x in val if isinstance(x, dict)])
-        elif isinstance(data, list):
-            raw_items.extend([x for x in data if isinstance(x, dict)])
+        def _collect_tiktok_nodes(obj: Any) -> None:
+            if isinstance(obj, list):
+                for el in obj:
+                    _collect_tiktok_nodes(el)
+            elif isinstance(obj, dict):
+                if "aweme_info" in obj and isinstance(obj["aweme_info"], dict):
+                    raw_items.append(obj["aweme_info"])
+                    return
+                if ("aweme_id" in obj or ("id" in obj and ("statistics" in obj or "stats" in obj))) and (
+                    "video" in obj or "desc" in obj
+                ):
+                    raw_items.append(obj)
+                    return
+                for v in obj.values():
+                    if isinstance(v, (dict, list)):
+                        _collect_tiktok_nodes(v)
 
-        for entry in raw_items:
-            aweme = entry.get("aweme_info") or entry.get("item") or entry
-            if not isinstance(aweme, dict):
-                continue
+        _collect_tiktok_nodes(payload)
+        seen_ids: set[str] = set()
+        for aweme in raw_items:
             vid = str(aweme.get("aweme_id") or aweme.get("id") or "").strip()
-            if not vid:
+            if not vid or vid in seen_ids:
                 continue
+            seen_ids.add(vid)
             stats = aweme.get("statistics") or aweme.get("stats") or {}
             author = aweme.get("author") or {}
             video_obj = aweme.get("video") or {}
@@ -247,6 +259,8 @@ class TikHubCollector(BaseCollector):
         hashtag = re.sub(r"[^a-zA-Z0-9\u4e00-\u9fff]+", "", query).lower()
         endpoints = [
             ("/api/v1/instagram/v2/search_reels", {"keyword": query}),
+            ("/api/v1/instagram/v2/fetch_hashtag_posts", {"keyword": hashtag or query, "feed_type": "top"}),
+            ("/api/v1/instagram/v3/get_hashtag_posts", {"tag": hashtag or query}),
             ("/api/v1/instagram/v1/fetch_hashtag_posts", {"hashtag": hashtag or query}),
         ]
         for path, params in endpoints:
@@ -338,10 +352,10 @@ class TikHubCollector(BaseCollector):
     async def _search_youtube(
         self, client: httpx.AsyncClient, query: str, limit: int
     ) -> list[CandidateVideo]:
-        q_short = f"{query} shorts" if "short" not in query.lower() else query
         endpoints = [
-            ("/api/v1/youtube/web/search_video", {"search_query": q_short}),
-            ("/api/v1/youtube/web/search_video", {"keyword": q_short}),
+            ("/api/v1/youtube/web_v2/get_shorts_search_v2", {"keyword": query, "sort_by": "view_count"}),
+            ("/api/v1/youtube/web_v2/get_shorts_search", {"search_query": query}),
+            ("/api/v1/youtube/web/search_video", {"search_query": f"{query} shorts"}),
         ]
         for path, params in endpoints:
             payload = await self._request_json(client, path, params)
@@ -355,23 +369,32 @@ class TikHubCollector(BaseCollector):
     def _parse_youtube_payload(self, payload: dict[str, Any]) -> list[CandidateVideo]:
         candidates: list[CandidateVideo] = []
         raw_items: list[dict[str, Any]] = []
-        data = payload.get("data") or payload
-        if isinstance(data, dict):
-            for key in ("videos", "items", "shorts", "data", "results"):
-                val = data.get(key)
-                if isinstance(val, list):
-                    raw_items.extend([x for x in val if isinstance(x, dict)])
-        elif isinstance(data, list):
-            raw_items.extend([x for x in data if isinstance(x, dict)])
 
+        def _collect_yt_nodes(obj: Any) -> None:
+            if isinstance(obj, list):
+                for el in obj:
+                    _collect_yt_nodes(el)
+            elif isinstance(obj, dict):
+                if any(k in obj for k in ("video_id", "videoId")) and any(
+                    k in obj for k in ("title", "headline", "number_of_views", "view_count", "views", "viewCountText")
+                ):
+                    raw_items.append(obj)
+                    return
+                for v in obj.values():
+                    if isinstance(v, (dict, list)):
+                        _collect_yt_nodes(v)
+
+        _collect_yt_nodes(payload)
+        seen_ids: set[str] = set()
         for item in raw_items:
             vid = _first_str(item.get("video_id"), item.get("videoId"), item.get("id"))
-            if not vid or len(vid) > 20:
+            if not vid or len(vid) > 20 or vid in seen_ids:
                 continue
+            seen_ids.add(vid)
             dur = _parse_duration_str(
                 item.get("video_length") or item.get("duration") or item.get("lengthText")
             )
-            is_short = (dur is not None and dur <= 70) or "short" in str(item.get("url", "")).lower()
+            is_short = (dur is None or dur <= 75) or "short" in str(item.get("url", "")).lower()
             video_url = (
                 f"https://www.youtube.com/shorts/{vid}"
                 if is_short
@@ -379,11 +402,16 @@ class TikHubCollector(BaseCollector):
             )
             thumbs = item.get("thumbnails") or []
             cover_url = _first_str(thumbs, item.get("thumbnail"), f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg")
-            views = _to_int(item.get("number_of_views") or item.get("view_count") or item.get("views"))
+            views = _to_int(
+                item.get("number_of_views")
+                or item.get("view_count")
+                or item.get("views")
+                or item.get("viewCountText")
+            )
             likes = _to_int(item.get("like_count") or item.get("likes"))
             if likes == 0 and views > 0:
                 likes = int(views * 0.04)
-            title = _first_str(item.get("title"), item.get("description"))
+            title = _first_str(item.get("title"), item.get("headline"), item.get("description"))
             candidates.append(
                 CandidateVideo(
                     platform="youtube",
