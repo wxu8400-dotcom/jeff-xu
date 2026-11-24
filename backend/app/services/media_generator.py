@@ -156,6 +156,45 @@ async def generate_product_image(
     )
 
 
+def _build_gemini_image_client(cfg: Settings):
+    from google import genai
+    from google.genai import types
+
+    # google-genai >= 3.x defaults to api_version="v1", while Gemini native image
+    # generation models (gemini-2.5-flash-image, gemini-3.1-flash-image-preview, etc.)
+    # and image_config are served on "v1beta".
+    http_kwargs: dict[str, Any] = {"api_version": "v1beta"}
+    if cfg.gemini_base_url.strip():
+        http_kwargs["base_url"] = cfg.gemini_base_url.strip().rstrip("/")
+    return genai.Client(
+        api_key=cfg.gemini_api_key.strip(),
+        http_options=types.HttpOptions(**http_kwargs),
+    )
+
+
+def _discover_gemini_image_models(client: Any) -> tuple[list[str], list[str]]:
+    """Query ListModels on the user's key to auto-discover available image models."""
+    gen_content_models: list[str] = []
+    imagen_models: list[str] = []
+    try:
+        for m in client.models.list():
+            raw_name = str(getattr(m, "name", "") or "")
+            short = raw_name.replace("models/", "").strip()
+            if not short:
+                continue
+            low = short.lower()
+            actions = [str(a).lower() for a in (getattr(m, "supported_actions", None) or [])]
+            if "image" in low and "gemini" in low:
+                if not actions or any("generatecontent" in a for a in actions):
+                    gen_content_models.append(short)
+            elif "imagen" in low:
+                if not actions or any("predict" in a or "generateimages" in a for a in actions):
+                    imagen_models.append(short)
+    except Exception as exc:
+        logger.warning("Gemini ListModels discovery skipped: %s", exc)
+    return gen_content_models, imagen_models
+
+
 async def _generate_image_gemini(
     *,
     cfg: Settings,
@@ -166,15 +205,9 @@ async def _generate_image_gemini(
     if not cfg.gemini_api_key.strip():
         raise RuntimeError("未配置 GEMINI_API_KEY，无法使用 Gemini 生图引擎")
 
-    from google import genai
     from google.genai import types
 
-    http_options = None
-    if cfg.gemini_base_url.strip():
-        http_options = types.HttpOptions(
-            base_url=cfg.gemini_base_url.strip().rstrip("/")
-        )
-    client = genai.Client(api_key=cfg.gemini_api_key.strip(), http_options=http_options)
+    client = _build_gemini_image_client(cfg)
 
     full_prompt = (
         f"Generate a single photorealistic commercial image in vertical {aspect_ratio} aspect ratio. "
@@ -193,31 +226,46 @@ async def _generate_image_gemini(
         cfg.gemini_image_model,
         "gemini-2.5-flash-image",
         "gemini-3.1-flash-image-preview",
-        "gemini-2.0-flash-exp-image-generation",
+        "gemini-3-pro-image-preview",
+        "gemini-2.5-flash-image-preview",
+        "gemini-2.0-flash-preview-image-generation",
     ):
         if m and m not in fallback_models:
             fallback_models.append(m)
 
-    def _call_model(model_name: str):
-        # Try passing image_config aspect_ratio if supported by SDK version; fallback cleanly otherwise
+    def _call_model(model_name: str, use_image_config: bool):
         gen_cfg_kwargs: dict[str, Any] = {"response_modalities": ["IMAGE", "TEXT"]}
-        try:
-            image_cfg_cls = getattr(types, "ImageConfig", None)
-            if image_cfg_cls is not None:
-                gen_cfg_kwargs["image_config"] = image_cfg_cls(aspect_ratio=aspect_ratio)
-        except Exception:
-            pass
+        if use_image_config:
+            try:
+                image_cfg_cls = getattr(types, "ImageConfig", None)
+                if image_cfg_cls is not None:
+                    gen_cfg_kwargs["image_config"] = image_cfg_cls(aspect_ratio=aspect_ratio)
+            except Exception:
+                pass
         return client.models.generate_content(
             model=model_name,
             contents=parts,
             config=types.GenerateContentConfig(**gen_cfg_kwargs),
         )
 
-    last_err: Exception | None = None
-    for idx, model_name in enumerate(fallback_models):
-        for retry in range(2):
+    errors_by_model: list[str] = []
+    quota_errors: list[str] = []
+    discovered = False
+    imagen_candidates: list[str] = [
+        "imagen-4.0-fast-generate-001",
+        "imagen-4.0-generate-001",
+        "imagen-3.0-generate-002",
+    ]
+
+    idx = 0
+    while idx < len(fallback_models):
+        model_name = fallback_models[idx]
+        idx += 1
+        use_img_cfg = True
+
+        for attempt in range(2):
             try:
-                resp = await asyncio.to_thread(_call_model, model_name)
+                resp = await asyncio.to_thread(_call_model, model_name, use_img_cfg)
                 img_bytes = _extract_gemini_image_bytes(resp)
                 if img_bytes:
                     opt_bytes, w, h = _optimize_generated_jpeg(img_bytes)
@@ -229,27 +277,95 @@ async def _generate_image_gemini(
                         provider="gemini",
                         model_name=model_name,
                     )
-                last_err = RuntimeError(f"模型 {model_name} 未返回图片数据（可能触发安全策略或仅返回文本）")
+                errors_by_model.append(f"{model_name}: 未返回图片（仅返回文本或触发安全过滤）")
                 break
             except Exception as exc:
-                last_err = exc
-                err_up = str(exc).upper()
-                is_404 = "404" in err_up or "NOT_FOUND" in err_up or "INVALID_ARGUMENT" in err_up
-                is_transient = any(
-                    k in err_up for k in ("503", "UNAVAILABLE", "429", "RESOURCE_EXHAUSTED", "OVERLOADED")
+                err_str = str(exc)
+                err_up = err_str.upper()
+
+                # If ImageConfig parameter itself is rejected, retry the SAME model without image_config
+                if use_img_cfg and "INVALID_ARGUMENT" in err_up and ("IMAGE_CONFIG" in err_up or "ASPECT_RATIO" in err_up or "UNKNOWN NAME" in err_up):
+                    logger.warning("Gemini %s rejected image_config, retrying without it...", model_name)
+                    use_img_cfg = False
+                    continue
+
+                is_404 = "404" in err_up or "NOT_FOUND" in err_up
+                is_quota_zero = ("429" in err_up or "RESOURCE_EXHAUSTED" in err_up) and (
+                    "LIMIT: 0" in err_up or "QUOTA" in err_up
                 )
-                if is_404:
-                    logger.warning("Gemini image model %s unavailable, trying next...", model_name)
+                is_transient = any(k in err_up for k in ("503", "UNAVAILABLE", "429", "OVERLOADED"))
+
+                if is_quota_zero:
+                    quota_errors.append(f"{model_name}: {err_str[:180]}")
+                    logger.warning("Gemini image model %s quota exhausted/0, trying next...", model_name)
                     break
-                if is_transient and retry == 0:
+                if is_404:
+                    errors_by_model.append(f"{model_name}: 404")
+                    logger.warning("Gemini image model %s returned 404 on v1beta, trying next...", model_name)
+                    # On first 404 wave, also dynamically discover any image models available on this key
+                    if not discovered:
+                        discovered = True
+                        disc_gemini, disc_imagen = await asyncio.to_thread(
+                            _discover_gemini_image_models, client
+                        )
+                        for dm in disc_gemini:
+                            if dm not in fallback_models:
+                                fallback_models.append(dm)
+                        for im in disc_imagen:
+                            if im not in imagen_candidates:
+                                imagen_candidates.insert(0, im)
+                    break
+                if is_transient and attempt == 0:
                     await asyncio.sleep(3.0)
                     continue
-                if idx < len(fallback_models) - 1:
-                    logger.warning("Gemini image model %s failed (%s), switching fallback...", model_name, exc)
-                    break
-                raise
 
-    raise RuntimeError(f"Gemini 一键生图失败：{last_err}")
+                errors_by_model.append(f"{model_name}: {err_str[:180]}")
+                logger.warning("Gemini image model %s failed: %s", model_name, exc)
+                break
+
+    # Final fallback: try Imagen generate_images (text-only fallback if Gemini multimodal image models are 404)
+    if not quota_errors:
+        for im_model in imagen_candidates:
+            try:
+                im_resp = await asyncio.to_thread(
+                    client.models.generate_images,
+                    model=im_model,
+                    prompt=prompt,
+                    config=types.GenerateImagesConfig(
+                        number_of_images=1,
+                        aspect_ratio=aspect_ratio if aspect_ratio in ("1:1", "3:4", "4:3", "9:16", "16:9") else "9:16",
+                    ),
+                )
+                gen_imgs = getattr(im_resp, "generated_images", None) or []
+                if gen_imgs:
+                    im_obj = getattr(gen_imgs[0], "image", None)
+                    im_bytes = getattr(im_obj, "image_bytes", None)
+                    if isinstance(im_bytes, bytes) and len(im_bytes) > 200:
+                        opt_bytes, w, h = _optimize_generated_jpeg(im_bytes)
+                        return GeneratedImageResult(
+                            image_bytes=opt_bytes,
+                            mime_type="image/jpeg",
+                            width=w,
+                            height=h,
+                            provider="gemini",
+                            model_name=im_model,
+                        )
+            except Exception as exc:
+                err_up = str(exc).upper()
+                if "429" in err_up or "RESOURCE_EXHAUSTED" in err_up:
+                    quota_errors.append(f"{im_model}: {str(exc)[:160]}")
+                else:
+                    errors_by_model.append(f"{im_model}: {str(exc)[:120]}")
+
+    if quota_errors:
+        raise RuntimeError(
+            "当前 Google Gemini 免费版 API Key 的生图模型配额已用尽或为 0（Google 近期限制了部分免费 Key 的生图额度）。"
+            "解决办法：① 在 Google AI Studio 开启计费（按量几分钱一张）；或 ② 在 Render 环境变量填入 OPENAI_IMAGE_API_KEY 切换为 ChatGPT (gpt-image-1) 生图。"
+            f" 详情：{quota_errors[0]}"
+        )
+
+    summary = " | ".join(errors_by_model[:4]) or "所有生图模型均不可用"
+    raise RuntimeError(f"Gemini 一键生图失败（已自动通过 v1beta 尝试多模型）：{summary}")
 
 
 def _extract_gemini_image_bytes(resp: Any) -> bytes | None:

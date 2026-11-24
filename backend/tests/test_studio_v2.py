@@ -6,7 +6,7 @@ import time
 from PIL import Image
 
 from app.config import Settings
-from app.services.media_generator import build_kling_auth_token
+from app.services.media_generator import _build_gemini_image_client, build_kling_auth_token
 from app.services.video_processor import is_ffmpeg_available
 from app.services.video_stitcher import image_to_motion_clip
 
@@ -50,6 +50,12 @@ def test_kling_jwt_and_bearer_auth_builder():
     parts = jwt_token.split(".")
     assert len(parts) == 3
     assert all(len(p) > 5 for p in parts)
+
+
+def test_gemini_image_client_uses_v1beta_api_version():
+    cfg = Settings(GEMINI_API_KEY="dummy-key-123")
+    client = _build_gemini_image_client(cfg)
+    assert client._api_client._http_options.api_version == "v1beta"
 
 
 def test_v2_studio_full_all_ai_and_hybrid_stitch_pipeline(make_client):
