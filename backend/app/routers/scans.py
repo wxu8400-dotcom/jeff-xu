@@ -85,11 +85,12 @@ async def create_radar_scan(
     product_name_override: str = Form(default=""),
     user_instruction: str = Form(default=""),
     platforms: str = Form(default='["tiktok","instagram","youtube"]'),
-    min_views: int = Form(default=100000),
-    min_likes: int = Form(default=5000),
+    min_views: int = Form(default=50000),
+    min_likes: int = Form(default=2000),
     date_range_days: int = Form(default=30),
     target_count: int = Form(default=5),
     auto_relax: bool = Form(default=True),
+    search_strategy: str = Form(default="cross_category"),
 ) -> dict[str, str]:
     raw_files = await _read_uploads(files)
     if not raw_files and not product_text.strip() and not product_name_override.strip():
@@ -101,12 +102,18 @@ async def create_radar_scan(
     bundle = await asyncio.to_thread(parse_product_materials, raw_files, product_text)
     plat_list = _parse_platforms(platforms)
     initial_name = product_name_override.strip() or "解析中产品"
+    clean_strategy = (
+        search_strategy
+        if search_strategy in ("cross_category", "hybrid", "same_category")
+        else "cross_category"
+    )
     filter_cfg = {
         "min_views": max(0, min_views),
         "min_likes": max(0, min_likes),
         "date_range_days": max(0, date_range_days),
         "target_count": max(1, min(target_count, 10)),
         "auto_relax": auto_relax,
+        "search_strategy": clean_strategy,
     }
 
     session = ScanSession(

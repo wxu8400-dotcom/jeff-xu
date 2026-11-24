@@ -27,10 +27,11 @@ import type {
 
 const DEFAULT_PARAMS: RadarFormParams = {
   mode: "radar",
+  searchStrategy: "cross_category",
   platforms: ["tiktok", "instagram", "youtube"],
-  minViews: 100000,
-  minLikes: 5000,
-  dateRangeDays: 30,
+  minViews: 50000,
+  minLikes: 2000,
+  dateRangeDays: 90,
   targetCount: 5,
   autoRelax: true,
   userInstruction: "",
@@ -193,6 +194,7 @@ export default function App() {
         fd.append("date_range_days", String(params.dateRangeDays));
         fd.append("target_count", String(params.targetCount));
         fd.append("auto_relax", String(params.autoRelax));
+        fd.append("search_strategy", params.searchStrategy);
         resp = await api.startRadarScan(fd);
       }
 

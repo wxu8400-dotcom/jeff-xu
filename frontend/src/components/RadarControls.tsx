@@ -3,6 +3,7 @@ import { Link2, Radar, Sparkles } from "lucide-react";
 
 export interface RadarFormParams {
   mode: "radar" | "direct_urls";
+  searchStrategy: "cross_category" | "hybrid" | "same_category";
   platforms: string[];
   minViews: number;
   minLikes: number;
@@ -97,13 +98,63 @@ export const RadarControls: React.FC<Props> = ({
             })}
           </div>
 
+          {/* Search Strategy Selector */}
+          <div className="space-y-1.5">
+            <span className="text-xs text-slate-400">爆款搜寻策略：</span>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              {[
+                {
+                  id: "cross_category" as const,
+                  title: "✨ 跨品类爆款模板（推荐）",
+                  desc: "不限原品类，专搜全网创意/CGI/AI/美学爆款来替换物品",
+                },
+                {
+                  id: "hybrid" as const,
+                  title: "🔀 跨品类 + 同品类混合",
+                  desc: "创意广告模板与泛品类高热视频各搜一半",
+                },
+                {
+                  id: "same_category" as const,
+                  title: "🎯 仅搜同品类高热",
+                  desc: "只搜与上传产品同一品类的热门视频",
+                },
+              ].map((st) => {
+                const active = params.searchStrategy === st.id;
+                return (
+                  <button
+                    key={st.id}
+                    type="button"
+                    onClick={() => onChange({ ...params, searchStrategy: st.id })}
+                    className={`text-left p-2.5 rounded-xl border transition ${
+                      active
+                        ? "bg-sky-500/15 border-sky-400 text-sky-100"
+                        : "bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700"
+                    }`}
+                  >
+                    <div className="text-xs font-semibold">{st.title}</div>
+                    <div className="text-[11px] opacity-80 mt-0.5 leading-snug">{st.desc}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {/* Quick presets */}
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <span className="text-slate-400">快捷门槛：</span>
             <button
               type="button"
               onClick={() =>
-                onChange({ ...params, minViews: 100000, minLikes: 5000, dateRangeDays: 30 })
+                onChange({ ...params, minViews: 50000, minLikes: 2000, dateRangeDays: 90 })
+              }
+              className="px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200"
+            >
+              5万播放 / 2千赞（创意广告推荐）
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                onChange({ ...params, minViews: 100000, minLikes: 5000, dateRangeDays: 90 })
               }
               className="px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200"
             >
@@ -112,20 +163,11 @@ export const RadarControls: React.FC<Props> = ({
             <button
               type="button"
               onClick={() =>
-                onChange({ ...params, minViews: 500000, minLikes: 20000, dateRangeDays: 30 })
+                onChange({ ...params, minViews: 500000, minLikes: 20000, dateRangeDays: 90 })
               }
               className="px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200"
             >
               50万大爆款
-            </button>
-            <button
-              type="button"
-              onClick={() =>
-                onChange({ ...params, minViews: 50000, minLikes: 2000, dateRangeDays: 7 })
-              }
-              className="px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200"
-            >
-              近7天新晋潜力
             </button>
           </div>
 

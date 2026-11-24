@@ -10,14 +10,32 @@ def build_product_dna_prompt(
     extracted_text: str,
     user_instruction: str,
     product_name_override: str = "",
+    search_strategy: str = "cross_category",
 ) -> str:
     override_hint = (
         f"用户指定产品名称：{product_name_override}（请优先采用该名称）"
         if product_name_override.strip()
         else "请从产品资料中提炼一个简短精准的中文产品名称（4~16字，适合作为历史记录分类名）"
     )
+    if search_strategy == "same_category":
+        query_rules = """【搜索词生成策略：同品类 C 端高热模式】
+请为每个平台生成 3 个该品类在海外社媒（C端消费者视角）最火的英文短词（2~3词），严禁枯燥的 B2B 采购/批发词（如 wholesale / supplier / fixture / retrofit）。"""
+    elif search_strategy == "hybrid":
+        query_rules = """【搜索词生成策略：跨品类创意模板 + 同品类混合模式】
+每个平台生成 3 个英文短词：
+- 第 1、2 个词：跨品类爆款创意广告/AI视觉模板词（严禁带原产品品类词，例如 `ai product commercial`, `cgi product ad`, `fooh cgi advertising`, `3d product animation`, `creative commercial video`, `product popping out`）；
+- 第 3 个词：C 端泛品类高热视觉词（严禁 B2B 批发词）。"""
+    else:
+        query_rules = """【搜索词生成策略：纯跨品类爆款创意模板模式 — 严格执行！】
+用户明确希望跳出自己产品的窄品类，去全网找**高播放、高点赞、视觉创意炸裂、只要把原片物品替换成用户产品就能立刻变同款爆款**的“跨品类创意广告模板”（典型案例：翻开画册家具 3D 悬浮弹出、街头 FOOH 巨物 CGI 广告、AI 超现实产品变形、极简高级商业摄影大片、微缩世界产品展示、创意运镜无缝转场）。
+
+因此，每个平台的 3 个英文搜索词 **严禁出现目标产品的具体品类名**（例如卖 LED 灯时，**绝对禁止**搜 `led`、`light`、`lighting`、`lamp`！），而是必须全部生成**跨品类高赞视觉创意广告模板词**，并贴合该产品的形态气质（如极简工业/家居空间/便携单品/高颜值消费品），从以下高质量爆款词方向灵活组合（每词 2~4 个英文单词）：
+- TikTok 方向：`ai product commercial`, `cgi product ad`, `fooh cgi advertising`, `creative product commercial`, `3d product reveal`, `surreal product ad`, `viral commercial idea`, `aesthetic product showcase`
+- Instagram Reels 方向：`cgi advertising`, `creative commercial video`, `3d product animation`, `ai commercial ad`, `minimalist product reel`, `fooh advertising`, `luxury product photography`
+- YouTube Shorts 方向：`creative product commercial`, `cgi product ad`, `3d product animation`, `ai commercial video`, `satisfying product ad`, `epic product video`"""
+
     return f"""你是顶级海外社媒（TikTok / Instagram Reels / YouTube Shorts）爆款创意总监与 AI 商业广告专家。
-请结合用户上传的产品图片/视频关键帧与下方文字资料，提炼结构化的《产品基因卡（Product DNA）》，并制定**高播放、高点赞、可跨品类替换产品**的爆款搜索词策略。
+请结合用户上传的产品图片/视频关键帧与下方文字资料，提炼结构化的《产品基因卡（Product DNA）》，并制定高播放、高点赞的搜索词策略。
 
 {override_hint}
 
@@ -27,13 +45,7 @@ def build_product_dna_prompt(
 产品文字与文档资料：
 {extracted_text or "（无纯文本，请重点依据随附图片/视频关键帧识别产品外观、品类与卖点）"}
 
-【核心搜索词生成铁律 — 极其重要！】
-我们**不是**在找枯燥的 B2B 工厂安装视频，而是要找**“爆款视觉创意模板”**——只要原视频里有一个清晰的物品主角位（例如：画册翻开产品 3D 悬浮弹出、FOOH 户外巨物 CGI 广告、AI 创意变装、极简美学开箱、前后改造视觉冲击、光影氛围展示等），即使原视频卖的是家具/台灯/音箱/香水/潮玩，我们也能把里面的物品替换成用户的产品变成爆款！
-
-因此，为每个平台生成的 3 个英文搜索词 **必须严格采用「双轨策略」**：
-- **第 1 个词（跨品类 AI / CGI 创意广告爆款词）**：结合产品物理特征（如长条/发光/空间/便携/材质），生成海外社媒极高播放量的创意广告模板词（例如：`ai product commercial`, `cgi product ad`, `3d product animation`, `fooh cgi advertising`, `creative product video`, `surreal product commercial`）。
-- **第 2 个词（跨品类视觉美学/空间改造爆款词）**：找跨品类同调性高赞视觉模板（例如针对灯具/家居用 `minimalist room transformation`, `aesthetic lighting glow up`, `creative furniture ad`；针对小家电/日用用 `aesthetic product showcase`, `satisfying unboxing`, `viral design gadget`）。
-- **第 3 个词（C端泛品类高热词）**：用海外普通消费者爱看的短词（2~3个单词为佳），**严禁生成枯燥的 B2B 采购/工程长尾词**（严禁出现 `wholesale`, `supplier`, `vapor tight`, `batten`, `retrofit`, `commercial electrician` 等几乎零播放的词汇！）。
+{query_rules}
 
 请严格输出纯 JSON（不要输出任何额外说明或 markdown 标记），字段必须完全符合以下格式：
 {{
@@ -44,15 +56,15 @@ def build_product_dna_prompt(
   "target_audience": "目标受众画像",
   "usage_scenarios": ["核心使用场景1", "核心使用场景2", "核心使用场景3"],
   "replaceable_visual_slots": [
-    "跨品类可替换的爆款视觉槽位（例如：画册/杂志弹出3D悬浮展示、户外/室内巨物FOOH创意CGI、暗到亮空间氛围改造、极简桌面/墙面产品特写大片）"
+    "跨品类可替换的爆款视觉槽位（例如：画册/杂志弹出3D悬浮展示、户外/室内巨物FOOH创意CGI、极简美学商业大片、微缩场景产品亮相）"
   ],
   "avoid_patterns": [
-    "必须剔除的视频形态（仅排除：纯人脸口播脱口秀、街头采访、纯新闻八卦、游戏录屏、完全没有物品主角位的视频）"
+    "必须剔除的视频形态（纯人脸口播脱口秀、街头采访、纯新闻八卦、游戏录屏、完全没有物品主角位的视频）"
   ],
   "search_queries": {{
-    "tiktok": ["跨品类AI/CGI创意词", "跨品类视觉美学/改造词", "C端泛品类高热短词"],
-    "instagram": ["跨品类AI/CGI创意词", "跨品类视觉美学/创意广告词", "C端泛品类高热短词"],
-    "youtube": ["跨品类AI/CGI创意词", "跨品类创意产品展示词", "C端泛品类高热短词"]
+    "tiktok": ["搜索词1", "搜索词2", "搜索词3"],
+    "instagram": ["搜索词1", "搜索词2", "搜索词3"],
+    "youtube": ["搜索词1", "搜索词2", "搜索词3"]
   }}
 }}"""
 
@@ -66,9 +78,10 @@ def build_preliminary_screening_prompt(
     candidates_json = json.dumps(candidates, ensure_ascii=False, indent=2)
     return f"""你是顶级短视频创意总监，负责评估高热视频的**「跨品类产品可替换性」**。
 
-【极其重要的核心原则：鼓励跨品类借壳复刻！】
-我们的目的**不是**只找同品类视频！
-举例说明：如果用户卖的是“LED 线性灯”，而候选视频是一条“翻开极简画册，一把家具长凳从书页里 3D 悬浮弹出来”的爆款视频，或者一条“街头巨物 CGI 香水广告”、或者一条“极简氛围台灯开箱/空间前后改造”——这些视频的核心本质都是**【强视觉钩子 + 独立物品主角槽位】**，只需把原视频里的家具/香水/台灯替换为用户的 LED 线性灯（用实拍或 ChatGPT Images + 可灵 Kling AI 复刻），就能做出同款爆款！这类跨品类爆款视频应该给 **80~98 高分**！
+【极其重要的核心原则：只找“能借壳复刻爆款画面元素”的跨品类爆款，严禁局限在同品类！】
+用户的核心需求是：**在全网找高播放、高点赞、有爆款画面/创意元素的视频，然后把原视频里的物品替换成用户的产品，复刻它的爆款视觉与结构！**
+- 绝对**不要**因为原视频展示的不是同品类物品就扣分！恰恰相反：如果一条视频展示的是家具悬浮、香水巨物 CGI、耳机/鞋包创意转场、画册 3D 弹出、微缩世界、高级光影大片，只要画面里的核心物品是一个可替换的“主角槽位”，能替换成用户的产品复刻它的爆款元素，就是 **90~98 分的顶级收录目标**！
+- 反而如果是枯燥无创意、没有爆款画面元素的普通安装/流水线实拍，分数应低于高创意跨品类爆款！
 
 目标产品基因卡：
 {dna_json}

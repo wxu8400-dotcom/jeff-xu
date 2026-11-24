@@ -234,21 +234,49 @@ class UnifiedAIClient:
                 seen_models.append(m)
 
         resp = None
-        last_404: Exception | None = None
+        last_err: Exception | None = None
         for idx, candidate_model in enumerate(seen_models):
-            try:
-                resp = await asyncio.to_thread(_sync_call, candidate_model)
+            for retry in range(2):
+                try:
+                    resp = await asyncio.to_thread(_sync_call, candidate_model)
+                    break
+                except Exception as exc:
+                    err_str = str(exc).upper()
+                    is_404 = "404" in err_str or "NOT_FOUND" in err_str
+                    is_transient = (
+                        "503" in err_str
+                        or "UNAVAILABLE" in err_str
+                        or "429" in err_str
+                        or "RESOURCE_EXHAUSTED" in err_str
+                        or "OVERLOADED" in err_str
+                    )
+                    last_err = exc
+                    if is_404:
+                        logger.warning(
+                            "Gemini model %s unavailable (404), trying next fallback...",
+                            candidate_model,
+                        )
+                        break
+                    if is_transient:
+                        if retry == 0:
+                            logger.warning(
+                                "Gemini model %s returned transient 503/429, retrying in 3s...",
+                                candidate_model,
+                            )
+                            await asyncio.sleep(3.0)
+                            continue
+                        if idx < len(seen_models) - 1:
+                            logger.warning(
+                                "Gemini model %s still busy (503/429), switching to next fallback model...",
+                                candidate_model,
+                            )
+                            break
+                    raise
+            if resp is not None:
                 break
-            except Exception as exc:
-                err_str = str(exc)
-                if ("404" in err_str or "NOT_FOUND" in err_str) and idx < len(seen_models) - 1:
-                    logger.warning("Gemini model %s unavailable (404), trying fallback...", candidate_model)
-                    last_404 = exc
-                    continue
-                raise
         if resp is None:
-            assert last_404 is not None
-            raise last_404
+            assert last_err is not None
+            raise last_err
         text = resp.text or ""
         usage_meta = getattr(resp, "usage_metadata", None)
         usage = TokenUsage(

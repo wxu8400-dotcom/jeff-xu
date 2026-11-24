@@ -207,10 +207,12 @@ async def run_radar_pipeline(
             progress_message="阶段 1/5：正在解析上传的产品资料并提炼《产品基因卡》...",
             funnel_stats=stats,
         )
+        search_strategy = str(filter_config.get("search_strategy", "cross_category"))
         dna_prompt = build_product_dna_prompt(
             extracted_text=product_bundle.combined_text,
             user_instruction=user_instruction,
             product_name_override=product_name_override,
+            search_strategy=search_strategy,
         )
         product_dna, dna_usage = await ai.generate_structured(
             prompt=dna_prompt,
