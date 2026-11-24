@@ -281,6 +281,7 @@ def test_gemini_recommended_model_parsing_and_302_safety_net(monkeypatch):
 
     monkeypatch.setattr(ai, "_build_gemini_client", lambda: _FakeClient())
     UnifiedAIClient._discovered_gemini_models = []
+    UnifiedAIClient._dead_gemini_models = set()
 
     called_relay = {}
 
@@ -303,4 +304,54 @@ def test_gemini_recommended_model_parsing_and_302_safety_net(monkeypatch):
     assert usage.input_tokens == 10
     assert called_relay["api_key_override"] == "sk-302-relay"
     assert called_relay["base_url_override"] == "https://api.302.ai/v1"
+    UnifiedAIClient._dead_gemini_models = set()
+
+
+def test_openai_compatible_302_fallback_recovers_from_500(monkeypatch):
+    import types as pytypes
+    from app.config import Settings
+    from app.services.ai_client import UnifiedAIClient
+
+    cfg = Settings(
+        OPENAI_IMAGE_API_KEY="sk-302-relay",
+        OPENAI_IMAGE_BASE_URL="https://api.302.ai/v1",
+        ENABLE_MOCK_MODE=False,
+    )
+    ai = UnifiedAIClient(cfg)
+
+    tried_models: list[str] = []
+
+    class _FakeCompletions:
+        async def create(self, **kwargs):
+            m = kwargs["model"]
+            tried_models.append(m)
+            if m == "gpt-4.1-mini":
+                raise RuntimeError("Error code: 500")
+            msg = pytypes.SimpleNamespace(content='{"status": "recovered"}')
+            choice = pytypes.SimpleNamespace(message=msg)
+            usage = pytypes.SimpleNamespace(prompt_tokens=120, completion_tokens=40)
+            return pytypes.SimpleNamespace(choices=[choice], usage=usage)
+
+    class _FakeAsyncOpenAI:
+        def __init__(self, **kwargs):
+            self.chat = pytypes.SimpleNamespace(completions=_FakeCompletions())
+
+    import openai
+
+    monkeypatch.setattr(openai, "AsyncOpenAI", _FakeAsyncOpenAI)
+
+    text, usage = asyncio.run(
+        ai._call_openai_compatible(
+            prompt="deep analysis",
+            tier="deep",
+            images=[],
+            video_bytes=None,
+            api_key_override="sk-302-relay",
+            base_url_override="https://api.302.ai/v1",
+        )
+    )
+    assert text == '{"status": "recovered"}'
+    assert usage.input_tokens == 120
+    assert tried_models == ["gpt-4.1-mini", "gpt-4o-mini"]
+
 

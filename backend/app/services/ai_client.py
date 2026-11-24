@@ -98,6 +98,7 @@ class UnifiedAIClient:
     OpenAI-compatible fallback, and deterministic Mock mode for testing."""
 
     _discovered_gemini_models: list[str] | None = None
+    _dead_gemini_models: set[str] = set()
 
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or get_settings()
@@ -228,11 +229,15 @@ class UnifiedAIClient:
                     schema_cls.__name__,
                     exc,
                 )
+                is_schema_err = isinstance(exc, (ValueError, json.JSONDecodeError)) or (
+                    "validationerror" in type(exc).__name__.lower()
+                )
                 if attempt == 0:
-                    prompt = (
-                        prompt
-                        + "\n\n【格式纠错提示】上次返回 JSON 解析失败，请务必只输出严格合法的纯 JSON 对象，不要包含注释或多余文字。"
-                    )
+                    if is_schema_err:
+                        prompt = (
+                            prompt
+                            + "\n\n【格式纠错提示】上次返回 JSON 解析失败，请务必只输出严格合法的纯 JSON 对象，不要包含注释或多余文字。"
+                        )
                     await asyncio.sleep(1.0)
         assert last_err is not None
         raise last_err
@@ -306,7 +311,7 @@ class UnifiedAIClient:
         )
         queue: list[str] = []
         for m in fallback_chain:
-            if m and m not in queue:
+            if m and m not in queue and m not in self._dead_gemini_models:
                 queue.append(m)
 
         resp = None
@@ -327,8 +332,13 @@ class UnifiedAIClient:
                     err_str = err_raw.upper()
                     is_404 = "404" in err_str or "NOT_FOUND" in err_str
                     is_transient = (
-                        "503" in err_str
+                        "500" in err_str
+                        or "INTERNAL" in err_str
+                        or "502" in err_str
+                        or "503" in err_str
+                        or "504" in err_str
                         or "UNAVAILABLE" in err_str
+                        or "DEADLINE_EXCEEDED" in err_str
                         or "429" in err_str
                         or "RESOURCE_EXHAUSTED" in err_str
                         or "OVERLOADED" in err_str
@@ -338,12 +348,13 @@ class UnifiedAIClient:
                         last_non_404_err = exc
 
                     if is_404:
+                        self._dead_gemini_models.add(candidate_model)
                         logger.warning(
                             "Gemini model %s unavailable (404), trying next fallback...",
                             candidate_model,
                         )
                         rec = self._parse_recommended_model_from_error(err_raw)
-                        if rec and rec not in queue:
+                        if rec and rec not in queue and rec not in self._dead_gemini_models:
                             queue.insert(idx, rec)
                             logger.info("Queued Google-recommended Gemini model: %s", rec)
                         if not discovered_added:
@@ -352,17 +363,18 @@ class UnifiedAIClient:
                                 self._discover_gemini_flash_models_sync, client
                             )
                             for lm in live_models:
-                                if lm not in queue:
+                                if lm not in queue and lm not in self._dead_gemini_models:
                                     queue.append(lm)
                         break
 
                     if is_transient:
                         if retry == 0:
                             logger.warning(
-                                "Gemini model %s returned transient 503/429, retrying in 3s...",
+                                "Gemini model %s returned transient error (%s), retrying in 2s...",
                                 candidate_model,
+                                err_raw[:120],
                             )
-                            await asyncio.sleep(3.0)
+                            await asyncio.sleep(2.0)
                             continue
                         if not discovered_added and idx >= len(queue):
                             discovered_added = True
@@ -370,11 +382,12 @@ class UnifiedAIClient:
                                 self._discover_gemini_flash_models_sync, client
                             )
                             for lm in live_models:
-                                if lm not in queue:
+                                if lm not in queue and lm not in self._dead_gemini_models:
                                     queue.append(lm)
                         logger.warning(
-                            "Gemini model %s still busy (503/429), switching to next fallback...",
+                            "Gemini model %s still failing (%s), switching to next fallback...",
                             candidate_model,
+                            err_raw[:120],
                         )
                         break
                     raise
@@ -431,23 +444,47 @@ class UnifiedAIClient:
     ) -> tuple[str, TokenUsage]:
         from openai import AsyncOpenAI
 
-        model_name = (
+        resolved_key = (api_key_override or self.settings.openai_api_key).strip()
+        resolved_url = (base_url_override or self.settings.openai_base_url).strip()
+        is_302 = "302.ai" in resolved_url.lower() or "302ai.com" in resolved_url.lower()
+
+        configured_model = (
             self.settings.openai_fast_model
             if tier == "fast"
             else self.settings.openai_deep_model
         )
+        if is_302:
+            raw_candidates = (
+                ["gpt-4o-mini", "gpt-4.1-mini", "gemini-2.5-flash", configured_model]
+                if tier == "fast"
+                else ["gpt-4.1-mini", "gpt-4o-mini", "gemini-2.5-flash", "gpt-4.1", configured_model]
+            )
+        else:
+            raw_candidates = (
+                [configured_model, "gpt-4o-mini", "gpt-4.1-mini"]
+                if tier == "fast"
+                else [configured_model, "gpt-4.1-mini", "gpt-4o-mini", "gpt-4o"]
+            )
+
+        candidates: list[str] = []
+        for m in raw_candidates:
+            if m and m not in candidates:
+                candidates.append(m)
+
         client = AsyncOpenAI(
-            api_key=(api_key_override or self.settings.openai_api_key).strip(),
-            base_url=(base_url_override or self.settings.openai_base_url).strip(),
+            api_key=resolved_key,
+            base_url=resolved_url,
+            timeout=90.0,
+            max_retries=1,
         )
 
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         all_images = list(images)
         if video_bytes:
-            frames = extract_keyframes_from_bytes(video_bytes, max_frames=6)
+            frames = extract_keyframes_from_bytes(video_bytes, max_frames=5)
             all_images.extend([(f, "image/jpeg") for f in frames])
 
-        for img_bytes, mime in all_images:
+        for img_bytes, mime in all_images[:6]:
             b64 = base64.b64encode(img_bytes).decode("ascii")
             content.append(
                 {
@@ -456,19 +493,48 @@ class UnifiedAIClient:
                 }
             )
 
-        resp = await client.chat.completions.create(
-            model=model_name,
-            messages=[{"role": "user", "content": content}],
-            temperature=0.35 if tier == "fast" else 0.5,
-            response_format={"type": "json_object"},
-        )
-        text = resp.choices[0].message.content or ""
-        usage_obj = resp.usage
-        usage = TokenUsage(
-            input_tokens=int(getattr(usage_obj, "prompt_tokens", 0) or 0),
-            output_tokens=int(getattr(usage_obj, "completion_tokens", 0) or 0),
-        )
-        return text, usage
+        last_err: Exception | None = None
+        tried_errors: list[str] = []
+        for target_model in candidates:
+            for use_json_mode in (True, False):
+                try:
+                    kwargs: dict[str, Any] = {
+                        "model": target_model,
+                        "messages": [{"role": "user", "content": content}],
+                        "temperature": 0.35 if tier == "fast" else 0.5,
+                    }
+                    if use_json_mode:
+                        kwargs["response_format"] = {"type": "json_object"}
+                    resp = await client.chat.completions.create(**kwargs)
+                    text = resp.choices[0].message.content or ""
+                    usage_obj = resp.usage
+                    usage = TokenUsage(
+                        input_tokens=int(getattr(usage_obj, "prompt_tokens", 0) or 0),
+                        output_tokens=int(getattr(usage_obj, "completion_tokens", 0) or 0),
+                    )
+                    return text, usage
+                except Exception as exc:
+                    last_err = exc
+                    err_str = str(exc)
+                    tried_errors.append(f"{target_model}: {err_str[:120]}")
+                    logger.warning(
+                        "OpenAI-compatible model %s (json_mode=%s) failed: %s",
+                        target_model,
+                        use_json_mode,
+                        err_str[:220],
+                    )
+                    # Only retry same model without response_format if JSON mode might be unsupported
+                    if use_json_mode and (
+                        "response_format" in err_str.lower()
+                        or "json_object" in err_str.lower()
+                        or "400" in err_str
+                    ):
+                        continue
+                    break
+
+        raise RuntimeError(
+            f"备选 AI 通道全部尝试失败（{' | '.join(tried_errors[-3:])}）"
+        ) from last_err
 
     def _mock_response(
         self, schema_cls: type[T], ctx: dict[str, Any]
