@@ -145,16 +145,18 @@ def build_deep_analysis_prompt(
     user_instruction: str,
     video_meta: dict[str, Any],
     analysis_mode: str,
+    director_memory_block: str = "",
 ) -> str:
     dna_json = json.dumps(product_dna.model_dump(), ensure_ascii=False, indent=2)
     meta_json = json.dumps(video_meta, ensure_ascii=False, indent=2)
+    memory_section = f"\n\n{director_memory_block}\n" if director_memory_block.strip() else ""
     mode_note = (
         "你正在直接观看该视频的完整画面与音频流，请精确捕捉每一个转场、运镜、景别、光影细节与原声台词。"
         if analysis_mode == "native_video"
         else "当前无法拉取原视频流，已降级为封面图+元数据深度推演模式，请结合封面构图与标题文案给出高度可落地的复刻分镜与提示词。"
     )
     return f"""你是顶级短视频编导、爆款 1:1 复刻导演兼 AI 视频提示词专家（精通 **可灵 Kling** 视频生成与 **GPT Image / Seedream** 产品融合出图）。
-{mode_note}
+{mode_note}{memory_section}
 
 【核心铁律：1:1 忠实复刻原爆款的情节、分镜与场景，绝不凭空编一个不一样的新视频！】
 用户的明确要求：
@@ -279,23 +281,33 @@ def build_director_revision_prompt(
     current_analysis: dict[str, Any],
     user_feedback: str,
     revision_history: list[dict[str, Any]],
+    director_memory_block: str = "",
 ) -> str:
     dna_json = json.dumps(product_dna.model_dump(), ensure_ascii=False, indent=2)
     curr_json = json.dumps(current_analysis, ensure_ascii=False, indent=2)
     hist_json = json.dumps(revision_history[-8:], ensure_ascii=False, indent=2)
+    memory_section = f"\n\n{director_memory_block}\n" if director_memory_block.strip() else ""
 
     return f"""你是用户的专属**爆款短视频 1:1 复刻导演**。用户正在和你共创、打磨这条爆款视频的复刻分镜方案（还没开始花钱生图/生视频）。
-请严格遵照用户的最新修改意见，对当前的 `analysis` 方案做精准修改，并**同步更新所有相关字段**，确保下一步点击生图和生视频时 100% 按照用户定稿执行！
+请严格遵照用户的最新修改意见，对当前的 `analysis` 方案做精准修改，并**同步更新所有相关字段**，确保下一步点击生图和生视频时 100% 按照用户定稿执行！{memory_section}
 
 【修改铁律】
-1. **严格保留 1:1 原片情节与未被用户要求改动的分镜**：用户没要求改的场景、镜头、节奏不要乱动！
+1. **严格最小化修改（未提及的地方绝不乱改！）**：整个视频的画面框架、原片节奏与用户**没有提及**的镜头/元素必须原封不动保留，**只改变用户明确要求替换或调整的元素**！
 2. **全链路同步更新**：
-   - 如果用户修改了**人物形象**（如年龄/性别/国籍/穿搭）→ 必须同时更新 `director_plan.ai_character_profile_cn`、`director_plan.ai_character_profile_en`，以及**所有 `has_person: true` 分镜的 `adapted_visual_for_product`、`chatgpt_images_prompts`、`kling_prompts`**！
-   - 如果用户调整了**产品出场分镜**（如“产品提前到第2镜出场”或“第1镜不要出现产品”）→ 必须同步更新对应分镜的 `replication_action`（`"keep_scene"` / `"insert_product"` / `"rewrite_scene"`）、`director_advice`、`adapted_visual_for_product`、`chatgpt_images_prompts`（含产品镜保留 `Keep the exact product from the uploaded reference image...`，不含产品镜移除产品描述！）和 `kling_prompts`！
+   - 如果用户修改了**人物形象**（如年龄/性别/国籍/气质/穿搭，例如“欧美漂亮贵妇”）→ 必须同时更新 `director_plan.ai_character_profile_cn`、`director_plan.ai_character_profile_en`（写实真人质感），以及**所有 `has_person: true` 分镜的 `adapted_visual_for_product`、`chatgpt_images_prompts`、`kling_prompts`**！
+   - 如果用户调整了**产品出场分镜或创意替换手法**（如“缩小版产品扔下→正常尺寸产品弹射落入奢华机舱客厅”）→ 必须同步更新对应分镜的 `replication_action`、`director_advice`、`adapted_visual_for_product`、`chatgpt_images_prompts` 和 `kling_prompts`！
    - 如果用户改了**剧情/场景/口播文案** → 同步更新 `storyboard`、`copywriting`（中英文脚本）、`chatgpt_images_prompts`、`kling_prompts`！
 3. **`chatgpt_images_prompts` 索引对齐**：索引 0 为主视觉海报，索引 1..N 严格一一对应 `storyboard` 的分镜 1..N！
 4. **`kling_prompts` 对齐**：与 `storyboard` 分镜 1..N 严格一一对应！
-5. 用自然、专业的导演口吻在 `director_reply` 里简洁回复用户：说明你改了哪几个分镜、怎么落实了他的想法，并询问是否还有需要微调的地方或可以直接锁定定稿。
+5. **自动沉淀长期导演记忆（`learned_memories`）**：
+   - 仔细体会用户本次意见背后体现出的**长期审美偏好、产品替换巧思、人物风格偏好、场景调性或改写纪律**，提炼 **0~2 条** 可复用到以后其他视频的精炼记忆规则放入 `learned_memories`！
+   - 每条记忆需包含：
+     - `category`：五选一 `"character"`（人物偏好）、`"scene_style"`（场景调性）、`"product_replacement"`（产品替换手法）、`"pacing_framing"`（画面框架与改写纪律）、`"taboo"`（禁区雷区）；
+     - `product_scope`：若适用于所有产品填 `"global"`，若针对某类产品填简短品类（如 `"沙发/家具"`）；
+     - `rule_summary`：一句话清晰可执行的导演规则（15~60字，如“遇到大件产品需融入小道具/奇观抛投情节时，可先用缩小版产品触发机关，再弹射变换为正常尺寸落入匹配的奢华空间”）；
+     - `example_snippet`：简短记录本次用户的精彩创意案例（如“私人飞机+火山口扔缩小沙发→弹出正常尺寸沙发落入机舱客厅配茶几”）。
+   - 如果用户只是做纯一次性细微文字修正、没有通用偏好可提炼，`learned_memories` 留空数组 `[]` 即可，宁缺毋滥。
+6. 用自然、专业的导演口吻在 `director_reply` 里简洁回复用户：说明你改了哪几个分镜、怎么落实了他的想法，以及你记住了他的哪些创作偏好。
 
 目标产品基因卡：
 {dna_json}
@@ -313,6 +325,14 @@ def build_director_revision_prompt(
 {{
   "director_reply": "给用户的导演回复（简洁清楚说明改了哪些镜头、人物或产品植入位置）",
   "changed_shots": [1, 2],
+  "learned_memories": [
+    {{
+      "category": "product_replacement",
+      "product_scope": "global",
+      "rule_summary": "一句精炼可复用的长期导演规则",
+      "example_snippet": "本次用户的精彩创意示例"
+    }}
+  ],
   "analysis": {{
     "...完整的更新后 VideoDeepAnalysis 对象，保留全部原有字段结构..."
   }}

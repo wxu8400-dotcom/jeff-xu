@@ -151,3 +151,30 @@ class GeneratedAsset(Base):
     video: Mapped[VideoRecord] = relationship(
         "VideoRecord", back_populates="generated_assets"
     )
+
+
+class DirectorMemory(Base):
+    """Long-term learned creative preferences & product-replacement craft distilled
+    across multi-turn AI Director conversations so the director gets smarter over time."""
+
+    __tablename__ = "director_memories"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    # character | scene_style | product_replacement | pacing_framing | taboo
+    category: Mapped[str] = mapped_column(String(32), default="product_replacement", index=True)
+    # "global" or specific product/category tag like "沙发/家具"
+    product_scope: Mapped[str] = mapped_column(String(80), default="global", index=True)
+    rule_summary: Mapped[str] = mapped_column(Text)
+    example_snippet: Mapped[str] = mapped_column(Text, default="")
+    source_video_title: Mapped[str] = mapped_column(String(200), default="")
+    confidence_hits: Mapped[int] = mapped_column(Integer, default=1)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow, index=True
+    )

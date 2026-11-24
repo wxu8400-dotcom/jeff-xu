@@ -22,6 +22,7 @@ from .collectors.base import CandidateVideo
 from .collectors.mock import MockCollector
 from .collectors.tikhub import TikHubCollector
 from .collectors.youtube_api import YouTubeOfficialCollector
+from .director_memory import load_director_memory_block
 from .filter_engine import run_hard_filter
 from .product_parser import ParsedProductBundle, _resize_jpeg
 from .prompts import (
@@ -535,6 +536,16 @@ async def run_radar_pipeline(
         total_deep = len(selected_for_deep)
         factory = get_session_factory()
 
+        mem_db = factory()
+        try:
+            director_memory_block = load_director_memory_block(
+                mem_db,
+                product_name=product_dna.product_name,
+                category=product_dna.category,
+            )
+        finally:
+            mem_db.close()
+
         for idx, (cand, prelim_score, prelim_item) in enumerate(selected_for_deep, start=1):
             pct = 60 + int(((idx - 1) / max(total_deep, 1)) * 35)
             _update_session(
@@ -579,6 +590,7 @@ async def run_radar_pipeline(
                 user_instruction=user_instruction,
                 video_meta=video_meta,
                 analysis_mode=analysis_mode,
+                director_memory_block=director_memory_block,
             )
 
             try:

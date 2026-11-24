@@ -1,6 +1,7 @@
 import type {
   AuthStatus,
   ConfigCheck,
+  DirectorMemoryItem,
   GeneratedAsset,
   ScanProgressEvent,
   ScanSessionDetail,
@@ -84,11 +85,46 @@ export const api = {
       ok: boolean;
       director_reply: string;
       changed_shots: number[];
+      learned_memories?: DirectorMemoryItem[];
       analysis_json: VideoDeepAnalysis;
     }>(`/api/studio/videos/${encodeURIComponent(videoId)}/revise-plan`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ feedback }),
+    }),
+
+  getDirectorMemories: () => apiFetch<DirectorMemoryItem[]>("/api/studio/memories"),
+
+  createDirectorMemory: (payload: {
+    category: string;
+    product_scope?: string;
+    rule_summary: string;
+    example_snippet?: string;
+  }) =>
+    apiFetch<DirectorMemoryItem>("/api/studio/memories", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+
+  updateDirectorMemory: (
+    memoryId: string,
+    payload: {
+      rule_summary?: string;
+      category?: string;
+      product_scope?: string;
+      is_active?: boolean;
+    }
+  ) =>
+    apiFetch<DirectorMemoryItem>(`/api/studio/memories/${encodeURIComponent(memoryId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+
+  deleteDirectorMemory: (memoryId: string) =>
+    apiFetch<{ ok: boolean }>(`/api/studio/memories/${encodeURIComponent(memoryId)}`, {
+      method: "DELETE",
     }),
 
   lockDirectorPlan: (videoId: string, locked: boolean) =>

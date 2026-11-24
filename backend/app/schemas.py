@@ -137,10 +137,46 @@ class VideoDeepAnalysis(BaseModel):
     kling_prompts: list[KlingVideoPrompt] = Field(default_factory=list)
 
 
+class LearnedMemoryItem(BaseModel):
+    category: str = "product_replacement"  # character | scene_style | product_replacement | pacing_framing | taboo
+    product_scope: str = "global"
+    rule_summary: str
+    example_snippet: str = ""
+
+
 class DirectorRevisionResponse(BaseModel):
     director_reply: str = ""
     changed_shots: list[int] = Field(default_factory=list)
+    learned_memories: list[LearnedMemoryItem] = Field(default_factory=list)
     analysis: VideoDeepAnalysis
+
+
+class DirectorMemoryOut(BaseModel):
+    id: str
+    category: str
+    product_scope: str
+    rule_summary: str
+    example_snippet: str = ""
+    source_video_title: str = ""
+    confidence_hits: int = 1
+    is_active: bool = True
+    created_at: datetime
+    updated_at: datetime
+
+
+class CreateDirectorMemoryRequest(BaseModel):
+    category: str = "product_replacement"
+    product_scope: str = "global"
+    rule_summary: str
+    example_snippet: str = ""
+
+
+class UpdateDirectorMemoryRequest(BaseModel):
+    rule_summary: str | None = None
+    category: str | None = None
+    product_scope: str | None = None
+    example_snippet: str | None = None
+    is_active: bool | None = None
 
 
 class VideoRecordOut(BaseModel):

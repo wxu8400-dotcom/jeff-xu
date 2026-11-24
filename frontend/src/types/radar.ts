@@ -74,7 +74,21 @@ export interface DirectorRevisionMessage {
   role: "user" | "director" | string;
   message: string;
   changed_shots?: number[];
+  learned_memories?: string[];
   timestamp?: string;
+}
+
+export interface DirectorMemoryItem {
+  id: string;
+  category: "character" | "scene_style" | "product_replacement" | "pacing_framing" | "taboo" | string;
+  product_scope: string;
+  rule_summary: string;
+  example_snippet: string;
+  source_video_title: string;
+  confidence_hits: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface DirectorPlan {

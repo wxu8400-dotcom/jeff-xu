@@ -17,6 +17,7 @@ from ..schemas import (
     DirectorPlan,
     DirectorRevisionResponse,
     KlingVideoPrompt,
+    LearnedMemoryItem,
     PreliminaryScreeningBatch,
     PreliminaryScreeningItem,
     ProductDNA,
@@ -867,10 +868,26 @@ class UnifiedAIClient:
                 updated.chatgpt_images_prompts[0].prompt_en = (
                     f"{updated.chatgpt_images_prompts[0].prompt_en} [Director revision applied: {feedback}]"
                 )
+            learned: list[LearnedMemoryItem] = []
+            if len(feedback) >= 6:
+                cat = (
+                    "character"
+                    if any(k in feedback for k in ("人物", "女生", "男生", "贵妇", "模特", "换角"))
+                    else "product_replacement"
+                )
+                learned.append(
+                    LearnedMemoryItem(
+                        category=cat,
+                        product_scope="global",
+                        rule_summary=f"遵循用户创作偏好：{feedback[:52]}",
+                        example_snippet=feedback[:80],
+                    )
+                )
             return (
                 DirectorRevisionResponse(
-                    director_reply=f"明白！已按你的意见「{feedback}」同步更新了分镜方案、AI 人物设定以及对应的生图/可灵提示词。你可以检查一下，如果满意就可以点击「确认定稿」开始按步骤出片啦！",
+                    director_reply=f"明白！已按你的意见「{feedback}」同步更新了分镜方案、AI 人物设定以及对应的生图/可灵提示词，并已沉淀至长期导演记忆库。你可以检查一下，满意就可以点击「确认定稿」开始按步骤出片啦！",
                     changed_shots=[1],
+                    learned_memories=learned,
                     analysis=updated,
                 ),
                 TokenUsage(input_tokens=3200, output_tokens=1800),

@@ -355,3 +355,79 @@ def test_openai_compatible_302_fallback_recovers_from_500(monkeypatch):
     assert tried_models == ["gpt-4.1-mini", "gpt-4o-mini"]
 
 
+def test_director_long_term_memory_auto_extraction_reinforcement_and_crud(make_client):
+    from app.services.director_memory import load_director_memory_block
+
+    with make_client(password="", mock_mode=True) as client:
+        # 1. Start a direct-URL analysis for cc 沙发
+        resp = client.post(
+            "/api/scans/analyze-urls",
+            data={
+                "product_name_override": "cc 沙发",
+                "product_text": "焦糖色奢华真皮双人沙发",
+                "urls": "https://www.tiktok.com/@brand/video/7412345678901234567",
+            },
+        )
+        assert resp.status_code == 200
+        detail = _wait_scan_done(client, resp.json()["session_id"])
+        video_id = detail["videos"][0]["id"]
+
+        # 2. First director revision automatically distills & persists long-term memory
+        rev1 = client.post(
+            f"/api/studio/videos/{video_id}/revise-plan",
+            json={
+                "feedback": "把飞机变成豪华私人飞机，欧美漂亮贵妇扔缩小版沙发，弹出正常尺寸沙发落入机舱客厅"
+            },
+        )
+        assert rev1.status_code == 200
+        rev1_data = rev1.json()
+        assert len(rev1_data["learned_memories"]) == 1
+        mem_id = rev1_data["learned_memories"][0]["id"]
+        assert rev1_data["learned_memories"][0]["confidence_hits"] == 1
+
+        # 3. Repeating a similar creative preference reinforces confidence_hits (no duplicate spam!)
+        rev2 = client.post(
+            f"/api/studio/videos/{video_id}/revise-plan",
+            json={
+                "feedback": "把飞机变成豪华私人飞机，欧美漂亮贵妇扔缩小版沙发，弹出正常尺寸沙发落入机舱客厅"
+            },
+        )
+        assert rev2.status_code == 200
+        assert rev2.json()["learned_memories"][0]["id"] == mem_id
+        assert rev2.json()["learned_memories"][0]["confidence_hits"] == 2
+
+        # 4. Verify memory block is automatically formatted for future videos
+        factory = get_session_factory()
+        db = factory()
+        try:
+            block = load_director_memory_block(db, product_name="cc 沙发", category="家具")
+            assert "私人飞机" in block
+            assert "已强化 2 次" in block
+        finally:
+            db.close()
+
+        # 5. Verify manual create / toggle / delete memory APIs
+        created = client.post(
+            "/api/studio/memories",
+            json={
+                "category": "pacing_framing",
+                "product_scope": "global",
+                "rule_summary": "未提及的画面框架和镜头绝不擅自改动",
+            },
+        )
+        assert created.status_code == 200
+        custom_id = created.json()["id"]
+
+        listed = client.get("/api/studio/memories").json()
+        assert len(listed) == 2
+
+        paused = client.patch(f"/api/studio/memories/{custom_id}", json={"is_active": False})
+        assert paused.status_code == 200
+        assert paused.json()["is_active"] is False
+
+        deleted = client.delete(f"/api/studio/memories/{custom_id}")
+        assert deleted.status_code == 200
+        assert len(client.get("/api/studio/memories").json()) == 1
+
+
+

@@ -29,8 +29,10 @@ from sqlalchemy.orm.attributes import flag_modified
 from ..auth import require_auth
 from ..config import DATA_DIR, get_settings
 from ..database import get_db, get_session_factory
-from ..models import GeneratedAsset, ScanSession, VideoRecord
+from ..models import DirectorMemory, GeneratedAsset, ScanSession, VideoRecord
 from ..schemas import (
+    CreateDirectorMemoryRequest,
+    DirectorMemoryOut,
     DirectorRevisionResponse,
     GenerateAllImagesRequest,
     GenerateAllVideosRequest,
@@ -42,12 +44,18 @@ from ..schemas import (
     RevisePlanRequest,
     StitchFinalVideoRequest,
     StudioStateOut,
+    UpdateDirectorMemoryRequest,
 )
 from ..services.ai_client import UnifiedAIClient
 from ..services.audio_engine import (
     generate_builtin_bgm_mp3,
     generate_tts_voiceover,
     mix_audio_into_mp4,
+)
+from ..services.director_memory import (
+    VALID_CATEGORIES,
+    load_director_memory_block,
+    save_learned_memories,
 )
 from ..services.media_generator import (
     decode_data_url_image,
@@ -597,6 +605,100 @@ async def _prepare_shot_image_inputs(
     return final_prompt, final_refs
 
 
+def _serialize_memory(row: DirectorMemory) -> DirectorMemoryOut:
+    return DirectorMemoryOut(
+        id=row.id,
+        category=row.category,
+        product_scope=row.product_scope,
+        rule_summary=row.rule_summary,
+        example_snippet=row.example_snippet or "",
+        source_video_title=row.source_video_title or "",
+        confidence_hits=row.confidence_hits or 1,
+        is_active=bool(row.is_active),
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+@router.get("/memories", response_model=list[DirectorMemoryOut])
+def list_director_memories(
+    db: Annotated[Session, Depends(get_db)],
+) -> list[DirectorMemoryOut]:
+    rows = list(
+        db.scalars(
+            select(DirectorMemory)
+            .order_by(
+                desc(DirectorMemory.is_active),
+                desc(DirectorMemory.confidence_hits),
+                desc(DirectorMemory.updated_at),
+            )
+            .limit(100)
+        ).all()
+    )
+    return [_serialize_memory(r) for r in rows]
+
+
+@router.post("/memories", response_model=DirectorMemoryOut)
+def create_director_memory(
+    body: CreateDirectorMemoryRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> DirectorMemoryOut:
+    summary = body.rule_summary.strip()
+    if len(summary) < 4:
+        raise HTTPException(status_code=400, detail="请填写至少 4 个字的导演偏好规则")
+    cat = body.category if body.category in VALID_CATEGORIES else "product_replacement"
+    row = DirectorMemory(
+        category=cat,
+        product_scope=(body.product_scope or "global").strip()[:80] or "global",
+        rule_summary=summary,
+        example_snippet=(body.example_snippet or "").strip()[:300],
+        source_video_title="手动添加长期偏好",
+        confidence_hits=1,
+        is_active=True,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return _serialize_memory(row)
+
+
+@router.patch("/memories/{memory_id}", response_model=DirectorMemoryOut)
+def update_director_memory(
+    memory_id: str,
+    body: UpdateDirectorMemoryRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> DirectorMemoryOut:
+    row = db.get(DirectorMemory, memory_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="记忆条目不存在")
+    if body.rule_summary is not None and body.rule_summary.strip():
+        row.rule_summary = body.rule_summary.strip()
+    if body.category is not None and body.category in VALID_CATEGORIES:
+        row.category = body.category
+    if body.product_scope is not None:
+        row.product_scope = body.product_scope.strip()[:80] or "global"
+    if body.example_snippet is not None:
+        row.example_snippet = body.example_snippet.strip()[:300]
+    if body.is_active is not None:
+        row.is_active = body.is_active
+    db.commit()
+    db.refresh(row)
+    return _serialize_memory(row)
+
+
+@router.delete("/memories/{memory_id}")
+def delete_director_memory(
+    memory_id: str,
+    db: Annotated[Session, Depends(get_db)],
+) -> dict[str, bool]:
+    row = db.get(DirectorMemory, memory_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="记忆条目不存在")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
 @router.post("/videos/{video_id}/revise-plan")
 async def revise_director_plan(
     video_id: str,
@@ -604,7 +706,8 @@ async def revise_director_plan(
     db: Annotated[Session, Depends(get_db)],
 ) -> dict[str, Any]:
     """Multi-turn AI Director co-creation: revise 1:1 storyboard, replacement AI character,
-    product placement, and synced image/Kling/voiceover prompts BEFORE spending image/video credits."""
+    product placement, and synced image/Kling/voiceover prompts BEFORE spending image/video credits.
+    Automatically extracts & reinforces reusable long-term director memories."""
     feedback = body.feedback.strip()
     if not feedback:
         raise HTTPException(status_code=400, detail="请输入你想修改的意见或想法")
@@ -622,11 +725,18 @@ async def revise_director_plan(
     curr_plan = dict(curr_analysis.get("director_plan") or {})
     history = list(curr_plan.get("revision_history") or [])
 
+    memory_block = load_director_memory_block(
+        db,
+        product_name=dna.product_name,
+        category=dna.category,
+    )
+
     rev_prompt = build_director_revision_prompt(
         product_dna=dna,
         current_analysis=curr_analysis,
         user_feedback=feedback,
         revision_history=history,
+        director_memory_block=memory_block,
     )
 
     try:
@@ -643,6 +753,13 @@ async def revise_director_plan(
         logger.exception("Director plan revision failed for video %s: %s", video_id, exc)
         raise HTTPException(status_code=502, detail=f"AI 导演修改方案失败：{exc}") from exc
 
+    saved_memories = save_learned_memories(
+        db,
+        rev_res.learned_memories or [],
+        source_video_title=video.title or session.product_name,
+    )
+    learned_summaries = [m.rule_summary for m in saved_memories]
+
     now_str = datetime.now(CN_TZ).strftime("%H:%M")
     new_history = list(history)
     new_history.append({"role": "user", "message": feedback, "timestamp": now_str})
@@ -651,6 +768,7 @@ async def revise_director_plan(
             "role": "director",
             "message": rev_res.director_reply,
             "changed_shots": rev_res.changed_shots,
+            "learned_memories": learned_summaries,
             "timestamp": now_str,
         }
     )
@@ -670,6 +788,7 @@ async def revise_director_plan(
         "ok": True,
         "director_reply": rev_res.director_reply,
         "changed_shots": rev_res.changed_shots,
+        "learned_memories": [_serialize_memory(m).model_dump(mode="json") for m in saved_memories],
         "analysis_json": video.analysis_json,
     }
 
