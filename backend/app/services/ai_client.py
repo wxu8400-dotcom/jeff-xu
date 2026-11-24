@@ -501,15 +501,17 @@ class UnifiedAIClient:
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         all_images = list(images)
         if video_bytes:
-            frames = extract_keyframes_from_bytes(video_bytes, max_frames=5)
+            frames = await asyncio.to_thread(extract_keyframes_from_bytes, video_bytes, 10)
             all_images.extend([(f, "image/jpeg") for f in frames])
 
-        for img_bytes, mime in all_images[:6]:
+        img_detail = "high" if tier == "deep" else "low"
+        max_imgs = 12 if tier == "deep" else 6
+        for img_bytes, mime in all_images[:max_imgs]:
             b64 = base64.b64encode(img_bytes).decode("ascii")
             content.append(
                 {
                     "type": "image_url",
-                    "image_url": {"url": f"data:{mime};base64,{b64}", "detail": "low"},
+                    "image_url": {"url": f"data:{mime};base64,{b64}", "detail": img_detail},
                 }
             )
 
@@ -654,14 +656,28 @@ class UnifiedAIClient:
                     else "自然手持微抖与真实环境光反射明显，判断为实拍爆款；同时已为你附带实拍与 AI 双套复刻提示词"
                 ),
                 director_plan=DirectorPlan(
-                    original_plot_summary="原爆款共 4 镜：开场人物特写抛钩子 → 中段单手展示痛点与核心产品亮相 → 前后空间对比反差 → 结尾高级桌面特写定格转化。",
-                    ai_character_profile_cn="26 岁原创时尚女性创作者，深棕色微卷齐肩发、自然清透妆容，身穿米白色极简针织衫（全片统一人物，与原片真人完全不同）",
+                    original_plot_summary="开场人物在真实室内空间展示原物品，镜头推进完成使用演示并以高级桌面定格收尾。",
+                    original_video_prompt_cn=(
+                        "写实电影级竖屏短视频：开场一位年轻人在自然采光的现代极简房间中坐在桌前，手持原片核心物品朝镜头展示细节；"
+                        "随后镜头平稳推进，手指轻按演示核心动作与前后对比效果；最后镜头缓慢环绕桌面定格收尾，光影柔和真实。"
+                    ),
+                    original_video_prompt_en=(
+                        "Photorealistic vertical 9:16 live-action video: Opening with a young person seated at a modern minimalist desk in natural daylight holding the original item; "
+                        "camera smoothly pushes in as they demonstrate the item in action, finishing with a gentle 30-degree arc orbit on the clean tabletop."
+                    ),
+                    current_master_prompt_cn=(
+                        "写实电影级竖屏短视频：开场一位年轻人在自然采光的现代极简房间中坐在桌前，手持原片核心物品朝镜头展示细节；"
+                        "随后镜头平稳推进，手指轻按演示核心动作与前后对比效果；最后镜头缓慢环绕桌面定格收尾，光影柔和真实。"
+                    ),
+                    current_master_prompt_en=(
+                        "Photorealistic vertical 9:16 live-action video: Opening with a young person seated at a modern minimalist desk in natural daylight holding the original item; "
+                        "camera smoothly pushes in as they demonstrate the item in action, finishing with a gentle 30-degree arc orbit on the clean tabletop."
+                    ),
+                    has_user_customized=False,
+                    ai_character_profile_cn="26 岁原创时尚女性创作者，深棕色微卷齐肩发、自然清透妆容，身穿米白色极简针织衫",
                     ai_character_profile_en="An original stylish 26-year-old woman with shoulder-length wavy dark brown hair, natural makeup, wearing a minimalist cream knit top",
-                    product_placement_plan=f"建议 1:1 保留原片 4 镜情节与场景构图：第 1 镜保留开场视觉钩子（仅换原创 AI 人物），第 2 镜将原物品直接替换为【{pname}】核心亮相，第 3 镜适度微调背景强化前后对比，第 4 镜保留极简美学定格突出产品质感。",
-                    open_questions_for_user=[
-                        "当前为你设计的 26 岁米白穿搭原创 AI 女性形象是否满意，还是想换成男性或亚洲极简风？",
-                        f"【{pname}】安排在第 2 镜正式出场并保留第 1 镜悬念，你想保持原节奏还是第 1 镜就直接露出产品？",
-                    ],
+                    product_placement_plan=f"等待你输入修改意见后，仅按你的要求替换指定人物、场景或【{pname}】，未提及部分保持原片不变。",
+                    open_questions_for_user=[],
                     revision_status="draft",
                     revision_history=[],
                 ),
@@ -854,11 +870,23 @@ class UnifiedAIClient:
             current_raw = ctx.get("current_analysis") or {}
             feedback = str(ctx.get("user_feedback") or "").strip()
             updated = VideoDeepAnalysis.model_validate(current_raw)
+            base_cn = (
+                updated.director_plan.current_master_prompt_cn
+                or updated.director_plan.original_video_prompt_cn
+            )
+            updated.director_plan.current_master_prompt_cn = (
+                f"{base_cn}（已按你的要求精准替换：{feedback}；未提及画面细节完全保持原视频不变）"
+            )
+            updated.director_plan.current_master_prompt_en = (
+                f"{updated.director_plan.current_master_prompt_en or updated.director_plan.original_video_prompt_en} "
+                f"[Surgically updated per user direction: {feedback}; all unmentioned framing and actions kept 100% identical]"
+            )
+            updated.director_plan.has_user_customized = True
             if updated.storyboard:
                 updated.storyboard[0].adapted_visual_for_product = (
                     f"{updated.storyboard[0].adapted_visual_for_product}（已按你的意见调整：{feedback}）"
                 )
-                updated.storyboard[0].director_advice = f"已根据你的最新反馈「{feedback}」同步更新本镜与提示词"
+                updated.storyboard[0].director_advice = f"已根据你的最新反馈「{feedback}」同步更新提示词"
             if any(k in feedback for k in ("人物", "女生", "男生", "亚洲", "穿搭", "换角")):
                 updated.director_plan.ai_character_profile_cn = f"已按你要求更新的原创 AI 人物：{feedback}"
                 updated.director_plan.ai_character_profile_en = (

@@ -75,6 +75,12 @@ class StoryboardShot(BaseModel):
 
 class DirectorPlan(BaseModel):
     original_plot_summary: str = ""
+    original_video_prompt_cn: str = ""
+    original_video_prompt_en: str = ""
+    current_master_prompt_cn: str = ""
+    current_master_prompt_en: str = ""
+    has_user_customized: bool = False
+    keyframe_previews: list[str] = Field(default_factory=list)
     ai_character_profile_cn: str = ""
     ai_character_profile_en: str = ""
     product_placement_plan: str = ""
@@ -345,6 +351,8 @@ class RevisePlanRequest(BaseModel):
 
 class LockPlanRequest(BaseModel):
     locked: bool = True
+    master_prompt_cn: str | None = None
+    master_prompt_en: str | None = None
 
 
 class GenerateVideoClipRequest(BaseModel):

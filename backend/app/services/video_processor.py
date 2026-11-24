@@ -19,10 +19,10 @@ def is_ffmpeg_available() -> bool:
 def compress_video_for_analysis(
     input_path: Path,
     max_duration_sec: int = 60,
-    target_height: int = 360,
-    target_fps: int = 1,
+    target_height: int = 540,
+    target_fps: int = 2,
 ) -> bytes:
-    """Compress video to low-bitrate 360p/1fps + 48kbps mono audio for minimal Gemini tokens."""
+    """Compress video to crisp 540p/2fps + 48kbps mono audio so quick opening frames stay clear."""
     if not is_ffmpeg_available():
         return input_path.read_bytes()
 
@@ -46,7 +46,7 @@ def compress_video_for_analysis(
             "-preset",
             "ultrafast",
             "-crf",
-            "30",
+            "25",
             "-pix_fmt",
             "yuv420p",
             "-ac",
@@ -82,12 +82,26 @@ def compress_video_for_analysis(
                 pass
 
 
+def _compute_inclusive_timestamps(duration: float, max_frames: int) -> list[float]:
+    """Always include the VERY FIRST opening frame (~0.15s) through the ending frame
+    so opening scenes (e.g. sitting in an airplane at 0:00) are NEVER skipped."""
+    count = max(1, max_frames)
+    if duration <= 0.6 or count == 1:
+        return [0.1]
+    start_ts = 0.15
+    end_ts = max(start_ts + 0.1, duration - 0.25)
+    if count == 2:
+        return [round(start_ts, 2), round(end_ts, 2)]
+    step = (end_ts - start_ts) / (count - 1)
+    return [round(start_ts + step * i, 2) for i in range(count)]
+
+
 def extract_keyframes_from_path(
     input_path: Path,
-    max_frames: int = 4,
-    max_width: int = 768,
+    max_frames: int = 10,
+    max_width: int = 960,
 ) -> list[bytes]:
-    """Extract evenly spaced JPEG keyframes from a local video file."""
+    """Extract evenly spaced JPEG keyframes from a local video file, guaranteed to start at ~0.15s."""
     if not is_ffmpeg_available():
         return []
 
@@ -95,11 +109,10 @@ def extract_keyframes_from_path(
     try:
         duration = _probe_duration_sec(input_path)
         frames: list[bytes] = []
-        if duration and duration > 1.0:
-            step = duration / (max_frames + 1)
-            timestamps = [max(0.2, round(step * (i + 1), 2)) for i in range(max_frames)]
+        if duration and duration > 0.6:
+            timestamps = _compute_inclusive_timestamps(duration, max_frames)
             for idx, ts in enumerate(timestamps):
-                out_jpg = tmp_dir / f"frame_{idx}.jpg"
+                out_jpg = tmp_dir / f"frame_{idx:02d}.jpg"
                 cmd = [
                     "ffmpeg",
                     "-y",
@@ -112,7 +125,7 @@ def extract_keyframes_from_path(
                     "-vf",
                     f"scale='min({max_width},iw)':-2",
                     "-q:v",
-                    "4",
+                    "3",
                     str(out_jpg),
                 ]
                 subprocess.run(
@@ -132,11 +145,11 @@ def extract_keyframes_from_path(
                 "-i",
                 str(input_path),
                 "-vf",
-                f"fps=0.5,scale='min({max_width},iw)':-2",
+                f"fps=1,scale='min({max_width},iw)':-2",
                 "-frames:v",
                 str(max_frames),
                 "-q:v",
-                "4",
+                "3",
                 out_pattern,
             ]
             subprocess.run(
@@ -149,19 +162,48 @@ def extract_keyframes_from_path(
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def extract_keyframes_from_bytes(video_bytes: bytes, max_frames: int = 6) -> list[bytes]:
+def extract_keyframes_from_bytes(
+    video_bytes: bytes, max_frames: int = 10, max_width: int = 960
+) -> list[bytes]:
     fd, tmp_name = tempfile.mkstemp(prefix="radar_vb_", suffix=".mp4")
     os.close(fd)
     tmp_path = Path(tmp_name)
     try:
         tmp_path.write_bytes(video_bytes)
-        return extract_keyframes_from_path(tmp_path, max_frames=max_frames)
+        return extract_keyframes_from_path(
+            tmp_path, max_frames=max_frames, max_width=max_width
+        )
     finally:
         if tmp_path.exists():
             try:
                 tmp_path.unlink()
             except OSError:
                 pass
+
+
+def extract_filmstrip_previews(video_bytes: bytes, max_frames: int = 6) -> list[str]:
+    """Extract compact base64 JPEG preview strip starting at 0.15s so the UI displays
+    the genuine original video frames right above the prompt."""
+    import base64
+    import io
+    from PIL import Image
+
+    raw_frames = extract_keyframes_from_bytes(
+        video_bytes, max_frames=max_frames, max_width=320
+    )
+    out: list[str] = []
+    for raw in raw_frames:
+        try:
+            with Image.open(io.BytesIO(raw)) as im:
+                rgb = im.convert("RGB")
+                rgb.thumbnail((240, 360))
+                buf = io.BytesIO()
+                rgb.save(buf, format="JPEG", quality=66, optimize=True)
+                b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+                out.append(f"data:image/jpeg;base64,{b64}")
+        except Exception:
+            continue
+    return out
 
 
 def _probe_duration_sec(input_path: Path) -> float | None:

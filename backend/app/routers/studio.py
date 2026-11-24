@@ -775,6 +775,19 @@ async def revise_director_plan(
 
     updated_dict = rev_res.analysis.model_dump()
     updated_plan = dict(updated_dict.get("director_plan") or {})
+    # Never lose immutable original video baseline prompt or extracted filmstrip previews!
+    if curr_plan.get("original_video_prompt_cn") and not updated_plan.get("original_video_prompt_cn"):
+        updated_plan["original_video_prompt_cn"] = curr_plan["original_video_prompt_cn"]
+    if curr_plan.get("original_video_prompt_en") and not updated_plan.get("original_video_prompt_en"):
+        updated_plan["original_video_prompt_en"] = curr_plan["original_video_prompt_en"]
+    if curr_plan.get("keyframe_previews"):
+        updated_plan["keyframe_previews"] = curr_plan["keyframe_previews"]
+    if not updated_plan.get("current_master_prompt_cn"):
+        updated_plan["current_master_prompt_cn"] = " ".join(
+            s.get("adapted_visual_for_product") or ""
+            for s in (updated_dict.get("storyboard") or [])
+        ).strip()
+    updated_plan["has_user_customized"] = True
     updated_plan["revision_status"] = "draft"
     updated_plan["revision_history"] = new_history
     updated_dict["director_plan"] = updated_plan
@@ -799,10 +812,15 @@ def lock_director_plan(
     body: LockPlanRequest,
     db: Annotated[Session, Depends(get_db)],
 ) -> dict[str, Any]:
-    """Lock (or unlock) the co-created 1:1 storyboard plan before launching image/video generation."""
+    """Lock (or unlock) the finalized video prompt before launching image/video generation."""
     video, _session = _get_video_and_session(db, video_id)
     analysis = dict(video.analysis_json or {})
     plan = dict(analysis.get("director_plan") or {})
+    if body.master_prompt_cn is not None and body.master_prompt_cn.strip():
+        plan["current_master_prompt_cn"] = body.master_prompt_cn.strip()
+        plan["has_user_customized"] = True
+    if body.master_prompt_en is not None and body.master_prompt_en.strip():
+        plan["current_master_prompt_en"] = body.master_prompt_en.strip()
     plan["revision_status"] = "locked" if body.locked else "draft"
     analysis["director_plan"] = plan
     video.analysis_json = analysis

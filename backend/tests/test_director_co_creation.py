@@ -430,4 +430,65 @@ def test_director_long_term_memory_auto_extraction_reinforcement_and_crud(make_c
         assert len(client.get("/api/studio/memories").json()) == 1
 
 
+def test_first_frame_inclusive_timestamps_and_unified_prompt_workflow(make_client):
+    from app.services.video_processor import _compute_inclusive_timestamps
+
+    # 1. Opening frame (~0.15s) MUST always be Frame 0 so airplane/opening shots are never skipped
+    ts_12s = _compute_inclusive_timestamps(12.0, 6)
+    assert ts_12s[0] == 0.15
+    assert ts_12s[-1] >= 11.5
+    assert len(ts_12s) == 6
+
+    with make_client(password="", mock_mode=True) as client:
+        resp = client.post(
+            "/api/scans/analyze-urls",
+            data={
+                "product_name_override": "cc 沙发",
+                "product_text": "焦糖色真皮双人沙发",
+                "urls": "https://www.tiktok.com/t/ZPNBMH3e7/",
+            },
+        )
+        assert resp.status_code == 200
+        detail = _wait_scan_done(client, resp.json()["session_id"])
+        video = detail["videos"][0]
+        video_id = video["id"]
+        plan = video["analysis_json"]["director_plan"]
+
+        # 2. Initial parse outputs pure original prompt with has_user_customized == False
+        assert plan["has_user_customized"] is False
+        assert plan["original_video_prompt_cn"]
+        assert plan["current_master_prompt_cn"] == plan["original_video_prompt_cn"]
+        orig_prompt = plan["original_video_prompt_cn"]
+
+        # 3. Multi-turn revision updates current_master_prompt_cn while keeping original_video_prompt_cn intact
+        r1 = client.post(
+            f"/api/studio/videos/{video_id}/revise-plan",
+            json={"feedback": "把飞机换成豪华私人飞机，人物换成欧美漂亮贵妇"},
+        )
+        assert r1.status_code == 200
+        p1 = r1.json()["analysis_json"]["director_plan"]
+        assert p1["has_user_customized"] is True
+        assert p1["original_video_prompt_cn"] == orig_prompt
+        assert "豪华私人飞机" in p1["current_master_prompt_cn"]
+
+        r2 = client.post(
+            f"/api/studio/videos/{video_id}/revise-plan",
+            json={"feedback": "再在客舱沙发前面加一张奢华大理石茶几"},
+        )
+        assert r2.status_code == 200
+        p2 = r2.json()["analysis_json"]["director_plan"]
+        assert "豪华私人飞机" in p2["current_master_prompt_cn"]
+        assert "大理石茶几" in p2["current_master_prompt_cn"]
+
+        # 4. Confirm/lock with optional manual text tweak
+        lock = client.post(
+            f"/api/studio/videos/{video_id}/lock-plan",
+            json={"locked": True, "master_prompt_cn": p2["current_master_prompt_cn"] + "（终版定稿）"},
+        )
+        assert lock.status_code == 200
+        assert lock.json()["revision_status"] == "locked"
+        assert lock.json()["analysis_json"]["director_plan"]["current_master_prompt_cn"].endswith("（终版定稿）")
+
+
+
 

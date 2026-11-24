@@ -93,6 +93,12 @@ export interface DirectorMemoryItem {
 
 export interface DirectorPlan {
   original_plot_summary?: string;
+  original_video_prompt_cn?: string;
+  original_video_prompt_en?: string;
+  current_master_prompt_cn?: string;
+  current_master_prompt_en?: string;
+  has_user_customized?: boolean;
+  keyframe_previews?: string[];
   ai_character_profile_cn?: string;
   ai_character_profile_en?: string;
   product_placement_plan?: string;

@@ -30,7 +30,7 @@ from .prompts import (
     build_preliminary_screening_prompt,
     build_product_dna_prompt,
 )
-from .video_processor import download_and_compress_video
+from .video_processor import download_and_compress_video, extract_filmstrip_previews
 from .viral_templates import (
     is_cartoon_or_animation_text,
     item_matches_same_category,
@@ -598,7 +598,9 @@ async def run_radar_pipeline(
                     prompt=deep_prompt,
                     schema_cls=VideoDeepAnalysis,
                     tier="deep",
-                    images=cover_images if compressed_video is None else product_bundle.ai_images[:1],
+                    # Pass ONLY original video / cover frames so AI faithfully transcribes the
+                    # original video without prematurely hallucinating the user's product!
+                    images=cover_images if compressed_video is None else [],
                     video_bytes=compressed_video,
                     mock_context={
                         "product_dna": product_dna,
@@ -609,6 +611,36 @@ async def run_radar_pipeline(
                 logger.exception("Deep analysis failed for %s: %s", cand.video_url, exc)
                 stats["warnings"].append(f"视频 {cand.platform_video_id} 拆解失败：{exc}")
                 continue
+
+            # Populate genuine filmstrip previews (starting from 0.15s opening frame!) and
+            # ensure current_master_prompt_cn/en are initialized cleanly from original_video_prompt.
+            if compressed_video:
+                previews = await asyncio.to_thread(
+                    extract_filmstrip_previews, compressed_video, 6
+                )
+                if previews:
+                    deep_res.director_plan.keyframe_previews = previews
+            elif cover_images:
+                import base64 as _b64
+
+                deep_res.director_plan.keyframe_previews = [
+                    f"data:{mime};base64,{_b64.b64encode(raw).decode('ascii')}"
+                    for raw, mime in cover_images[:1]
+                ]
+
+            if not deep_res.director_plan.original_video_prompt_cn:
+                deep_res.director_plan.original_video_prompt_cn = (
+                    deep_res.director_plan.original_plot_summary
+                    or "；".join(s.original_visual for s in deep_res.storyboard if s.original_visual)
+                )
+            if not deep_res.director_plan.current_master_prompt_cn:
+                deep_res.director_plan.current_master_prompt_cn = (
+                    deep_res.director_plan.original_video_prompt_cn
+                )
+            if not deep_res.director_plan.current_master_prompt_en:
+                deep_res.director_plan.current_master_prompt_en = (
+                    deep_res.director_plan.original_video_prompt_en
+                )
 
             total_usage.add(v_usage)
             _sync_tokens()

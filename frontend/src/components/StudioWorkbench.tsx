@@ -80,8 +80,11 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
   const [batchVidBusy, setBatchVidBusy] = useState(false);
   const [stitchBusy, setStitchBusy] = useState(false);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [forceShowGenerator, setForceShowGenerator] = useState(false);
+  const [showSegmentDetails, setShowSegmentDetails] = useState(false);
 
   const refInputRef = useRef<HTMLInputElement | null>(null);
+  const genSectionRef = useRef<HTMLDivElement | null>(null);
 
   const a = video.analysis_json;
   const storyboard = useMemo(() => a?.storyboard || [], [a]);
@@ -457,16 +460,38 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
 
   const posterAsset = latestImageBySlot[0];
   const isDirectorLocked = a?.director_plan?.revision_status === "locked";
+  const showGeneratorPanel = isDirectorLocked || forceShowGenerator || studio.assets.length > 0;
 
   return (
     <div className="space-y-5">
-      {/* Step 0: AI Director 1:1 Co-Creation & Confirmation Panel */}
+      {/* Step 1: Unified Original Prompt -> Multi-Turn User Revision -> Confirm */}
       <DirectorCoCreatePanel
         video={video}
         onAnalysisUpdated={handleAnalysisUpdated}
+        onConfirmedGenerate={() => {
+          setForceShowGenerator(true);
+          setTimeout(() => {
+            genSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }, 120);
+        }}
         onToast={onToast}
       />
 
+      {!showGeneratorPanel ? (
+        <div className="bg-slate-950/70 border border-dashed border-slate-800 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+          <span>
+            👆 请先在上方审阅提示词并写下修改意见，确认完全没问题后点击<b>「确认没问题，开始生成」</b>，下方的一键生成面板就会自动展开（改提示词阶段 0 生图费用）。
+          </span>
+          <button
+            type="button"
+            onClick={() => setForceShowGenerator(true)}
+            className="text-sky-400 hover:text-sky-300 font-semibold shrink-0"
+          >
+            跳过确认，直接展开生成面板 →
+          </button>
+        </div>
+      ) : (
+        <div ref={genSectionRef} className="space-y-5">
       {/* Top Control Header */}
       <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -484,9 +509,9 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
             )}
             <div className="min-w-0">
               <div className="text-sm font-bold text-white flex items-center gap-2 flex-wrap">
-                <span>一键替换商品直出工坊</span>
+                <span>步骤 2：按确认好的提示词一键生成视频</span>
                 <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[11px] font-medium">
-                  已绑定产品：{studio.product_name}
+                  已绑定商品图：{studio.product_name}
                 </span>
               </div>
               <p className="text-[11px] text-slate-400 mt-0.5">
@@ -754,7 +779,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
             <div className="flex items-start gap-2 rounded-xl bg-amber-500/10 border border-amber-500/30 px-3 py-2 text-[11px] text-amber-200 leading-relaxed">
               <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
               <span>
-                <b>温馨提示：</b>你尚未在上方「步骤 0：AI 导演 1:1 复刻分镜共创」点击<b>「✅ 确认分镜定稿」</b>。建议先和 AI 导演聊好哪个分镜放产品、换什么 AI 人物，确认定稿后再花钱点下方 1 → 2 → 3 生成图片和视频（当然你也可以直接生成）。
+                <b>提示：</b>上方提示词尚未点击<b>「确认没问题，开始生成」</b>，建议先在上方核对并确认定稿后再生成。
               </span>
             </div>
           )}
@@ -801,7 +826,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
             className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 disabled:opacity-60 text-slate-950 font-bold text-xs inline-flex items-center gap-1.5 shadow-lg shadow-emerald-500/15"
           >
             {batchImgBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
-            1. 一键生成全部分镜商品图
+            1. 一键生成画面首帧图
           </button>
 
           <button
@@ -815,7 +840,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
             }`}
           >
             {batchVidBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Clapperboard className="w-4 h-4" />}
-            2. 一键可灵生成 AI 视频{studio.kling_configured ? "" : "（可选·需配 Kling Key）"}
+            2. 一键可灵生成动态视频{studio.kling_configured ? "" : "（可选·需配 Kling Key）"}
           </button>
 
           <button
@@ -825,7 +850,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
             className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-400 hover:to-pink-400 disabled:opacity-50 text-white font-bold text-xs inline-flex items-center gap-1.5 shadow-lg shadow-purple-500/20"
           >
             {stitchBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Film className="w-4 h-4" />}
-            3. 一键合成 9:16 成片 MP4（已就绪 {readyShotCount}/{storyboard.length} 镜）
+            3. 一键合成 9:16 成片 MP4（已就绪 {readyShotCount}/{storyboard.length}）
           </button>
 
           {hasProcessing && (
@@ -970,15 +995,23 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
         </div>
       )}
 
-      {/* Shot-by-Shot Storyboard Production Cards */}
+      {/* Optional Collapsible Segment Asset Inspector */}
       <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-sm font-bold text-white">
-            逐镜制作面板（共 {storyboard.length} 个分镜，可单镜自由切换「AI 生成」或「手机实拍」）
-          </h3>
-        </div>
+        <button
+          type="button"
+          onClick={() => setShowSegmentDetails((v) => !v)}
+          className="w-full px-4 py-2.5 rounded-xl bg-slate-950 hover:bg-slate-900 border border-slate-800 flex items-center justify-between text-xs text-slate-300"
+        >
+          <span>
+            生成的画面与视频片段明细（已就绪 {readyShotCount}/{storyboard.length}，默认自动处理，需要单张重绘时可展开）
+          </span>
+          <span className="text-sky-400 font-semibold">
+            {showSegmentDetails || studio.assets.length > 0 ? (showSegmentDetails ? "收起明细 ▲" : "展开查看 / 单张重绘 ▼") : "展开明细 ▼"}
+          </span>
+        </button>
 
-        {storyboard.map((shot) => {
+        {(showSegmentDetails || hasProcessing || studio.assets.length > 0) &&
+          storyboard.map((shot) => {
           const mode = effectiveShotMode(shot);
           const imgAsset = latestImageBySlot[shot.shot_no];
           const vidAsset = latestVideoByShot[shot.shot_no];
@@ -1314,6 +1347,8 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
           );
         })}
       </div>
+      </div>
+      )}
 
       {/* Lightbox Preview */}
       {lightboxUrl && (

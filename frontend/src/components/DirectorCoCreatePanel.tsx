@@ -4,6 +4,10 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Edit3,
+  Eye,
+  Film,
+  Loader2,
   Lock,
   MessageSquare,
   Plus,
@@ -11,11 +15,16 @@ import {
   Sparkles,
   Trash2,
   Unlock,
-  UserRound,
-  Loader2,
 } from "lucide-react";
 import { api } from "../api/client";
 import type { DirectorMemoryItem, VideoDeepAnalysis, VideoRecord } from "../types/radar";
+
+interface Props {
+  video: VideoRecord;
+  onAnalysisUpdated: (nextAnalysis: VideoDeepAnalysis) => void;
+  onConfirmedGenerate?: () => void;
+  onToast: (msg: string) => void;
+}
 
 const MEMORY_CATEGORY_LABELS: Record<string, { label: string; cls: string }> = {
   character: { label: "👤 人物偏好", cls: "bg-purple-500/20 text-purple-200 border-purple-500/40" },
@@ -28,41 +37,46 @@ const MEMORY_CATEGORY_LABELS: Record<string, { label: string; cls: string }> = {
   taboo: { label: "🚫 避坑禁区", cls: "bg-rose-500/20 text-rose-200 border-rose-500/40" },
 };
 
-interface Props {
-  video: VideoRecord;
-  onAnalysisUpdated: (nextAnalysis: VideoDeepAnalysis) => void;
-  onToast: (msg: string) => void;
-}
-
-const ACTION_BADGE: Record<string, { label: string; cls: string }> = {
-  keep_scene: {
-    label: "🔒 1:1 原样复刻场景/情节",
-    cls: "bg-slate-800 text-slate-200 border-slate-600",
-  },
-  insert_product: {
-    label: "🔄 植入你的产品",
-    cls: "bg-emerald-500/20 text-emerald-300 border-emerald-500/40",
-  },
-  rewrite_scene: {
-    label: "✏️ 适度改写场景",
-    cls: "bg-amber-500/20 text-amber-300 border-amber-500/40",
-  },
-};
-
 export const DirectorCoCreatePanel: React.FC<Props> = ({
   video,
   onAnalysisUpdated,
+  onConfirmedGenerate,
   onToast,
 }) => {
   const analysis = video.analysis_json;
   const plan = analysis?.director_plan;
   const isLocked = plan?.revision_status === "locked";
+  const hasCustomized = Boolean(plan?.has_user_customized);
 
-  const [expanded, setExpanded] = useState(!isLocked);
+  // Build fallback continuous prompt cleanly if viewing an older record created before V2.3
+  const fallbackOriginalPrompt =
+    plan?.original_video_prompt_cn ||
+    plan?.original_plot_summary ||
+    (analysis?.storyboard || []).map((s) => s.original_visual).filter(Boolean).join("；") ||
+    "正在读取原视频画面提示词...";
+
+  const currentPromptCn =
+    plan?.current_master_prompt_cn ||
+    (hasCustomized
+      ? (analysis?.storyboard || []).map((s) => s.adapted_visual_for_product).filter(Boolean).join("；")
+      : fallbackOriginalPrompt);
+
+  const currentPromptEn = plan?.current_master_prompt_en || plan?.original_video_prompt_en || "";
+  const keyframes = plan?.keyframe_previews || [];
+  const history = plan?.revision_history || [];
+
+  const [expanded, setExpanded] = useState(true);
   const [feedback, setFeedback] = useState("");
   const [revising, setRevising] = useState(false);
   const [locking, setLocking] = useState(false);
-  const [recentChangedShots, setRecentChangedShots] = useState<number[]>([]);
+  const [showOriginalRef, setShowOriginalRef] = useState(false);
+  const [showEnglishPrompt, setShowEnglishPrompt] = useState(false);
+  const [manualEditing, setManualEditing] = useState(false);
+  const [manualTextCn, setManualTextCn] = useState(currentPromptCn);
+
+  useEffect(() => {
+    setManualTextCn(currentPromptCn);
+  }, [currentPromptCn]);
 
   // Long-term AI Director Memory Vault
   const [memories, setMemories] = useState<DirectorMemoryItem[]>([]);
@@ -84,15 +98,12 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
     loadMemories();
   }, [loadMemories]);
 
-  const storyboard = analysis?.storyboard || [];
-  const history = plan?.revision_history || [];
-  const questions = plan?.open_questions_for_user || [];
   const activeMemoryCount = memories.filter((m) => m.is_active).length;
 
   const handleAddMemory = async () => {
     const clean = newRuleText.trim();
     if (clean.length < 4) {
-      onToast("请输入至少 4 个字的导演偏好规则");
+      onToast("请输入至少 4 个字的偏好规则");
       return;
     }
     setSavingRule(true);
@@ -104,7 +115,7 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
       });
       setNewRuleText("");
       await loadMemories();
-      onToast("🧠 已写入导演长期记忆库，以后拆解所有新视频都会自动运用！");
+      onToast("🧠 已记入长期记忆库，后续所有视频改写都会自动运用！");
     } catch (err) {
       onToast(err instanceof Error ? err.message : "保存记忆失败");
     } finally {
@@ -134,25 +145,21 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
   const handleSendFeedback = async () => {
     const clean = feedback.trim();
     if (!clean) {
-      onToast("请先输入你想调整的分镜、人物或产品出场意见");
+      onToast("请先写下你的修改意见");
       return;
     }
     setRevising(true);
     try {
       const resp = await api.reviseDirectorPlan(video.id, clean);
-      setRecentChangedShots(resp.changed_shots || []);
       setFeedback("");
+      setManualEditing(false);
       onAnalysisUpdated(resp.analysis_json);
       await loadMemories();
       const memCount = resp.learned_memories?.length || 0;
-      const memHint = memCount > 0 ? `，并新沉淀 ${memCount} 条长期记忆 🧠` : "";
-      onToast(
-        resp.changed_shots?.length
-          ? `AI 导演已更新分镜 ${resp.changed_shots.join("、")} 及全部提示词${memHint}！`
-          : `AI 导演已更新分镜与提示词${memHint}！`
-      );
+      const memHint = memCount > 0 ? `（并自动记住了 ${memCount} 条偏好 🧠）` : "";
+      onToast(`✨ 已按你的意见重新编写好提示词${memHint}`);
     } catch (err) {
-      onToast(err instanceof Error ? err.message : "AI 导演修改失败");
+      onToast(err instanceof Error ? err.message : "AI 重新编写提示词失败");
     } finally {
       setRevising(false);
     }
@@ -161,16 +168,22 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
   const handleToggleLock = async (nextLocked: boolean) => {
     setLocking(true);
     try {
-      const resp = await api.lockDirectorPlan(video.id, nextLocked);
+      const overrides =
+        manualEditing && manualTextCn.trim() && manualTextCn.trim() !== currentPromptCn
+          ? { master_prompt_cn: manualTextCn.trim() }
+          : undefined;
+      const resp = await api.lockDirectorPlan(video.id, nextLocked, overrides);
+      setManualEditing(false);
       onAnalysisUpdated(resp.analysis_json);
-      setExpanded(!nextLocked);
-      onToast(
-        nextLocked
-          ? "✅ 分镜方案已定稿锁定！现在可以放心按 1 → 2 → 3 生成图片和视频啦"
-          : "已解锁分镜方案，你可以继续和 AI 导演对话修改"
-      );
+      if (nextLocked) {
+        onToast("✅ 提示词已确认定稿！现在可以直接在下方点击生成画面与视频");
+        onConfirmedGenerate?.();
+      } else {
+        setExpanded(true);
+        onToast("已解锁提示词，你可以继续发意见修改");
+      }
     } catch (err) {
-      onToast(err instanceof Error ? err.message : "操作失败");
+      onToast(err instanceof Error ? err.message : "确认操作失败");
     } finally {
       setLocking(false);
     }
@@ -198,21 +211,25 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
           )}
           <div className="min-w-0">
             <div className="text-sm font-bold text-white flex flex-wrap items-center gap-2">
-              <span>步骤 0：AI 导演 1:1 复刻分镜共创 & 定稿</span>
+              <span>步骤 1：原视频提示词还原 & 按你的意见改写</span>
               <span
                 className={`px-2 py-0.5 rounded-full text-[11px] font-semibold border ${
                   isLocked
                     ? "bg-emerald-500/20 border-emerald-400/50 text-emerald-200"
+                    : hasCustomized
+                    ? "bg-sky-500/20 border-sky-400/50 text-sky-200"
                     : "bg-amber-500/20 border-amber-400/50 text-amber-200"
                 }`}
               >
-                {isLocked ? "✓ 已确认定稿（可安心出片）" : "待你确认 · 0 生图费无限改稿"}
+                {isLocked
+                  ? "✓ 已确认无误（下方可直接生成）"
+                  : hasCustomized
+                  ? "已按你意见改写 · 可继续修改或确认"
+                  : "已还原原视频提示词 · 等待你的修改意见"}
               </span>
             </div>
             <p className="text-[11px] text-slate-400 mt-0.5">
-              {isLocked
-                ? "下方 1→2→3 生图/可灵视频/配音将严格按照你的定稿分镜与 AI 人物执行。"
-                : "先审阅 1:1 剧情复刻方案、替换的 AI 新人物和产品出场位置；不满意直接发意见让 AI 改到满意再花钱出图！"}
+              先核对原视频还原的提示词 → 写下你想替换的人物/场景/商品，你没提到的地方 100% 保持原视频不变 → 改到完全满意再点确认生成！
             </p>
           </div>
           {expanded ? (
@@ -234,10 +251,9 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                 ? "bg-purple-500/25 border-purple-400 text-purple-100"
                 : "bg-slate-900 hover:bg-slate-800 border-purple-500/40 text-purple-200"
             }`}
-            title="查看或管理 AI 导演从你历史对话中积累的专属偏好记忆"
           >
             <Brain className="w-3.5 h-3.5 text-purple-400" />
-            导演记忆库（{activeMemoryCount} 条）
+            记忆库（{activeMemoryCount} 条）
           </button>
           {isLocked ? (
             <button
@@ -247,7 +263,7 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
               className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold inline-flex items-center gap-1.5"
             >
               <Unlock className="w-3.5 h-3.5 text-amber-400" />
-              解锁继续修改分镜
+              继续修改提示词
             </button>
           ) : (
             <button
@@ -261,7 +277,7 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
               ) : (
                 <Lock className="w-3.5 h-3.5" />
               )}
-              ✅ 确认定稿，开始按步骤生成
+              ✅ 确认没问题，去生成视频
             </button>
           )}
         </div>
@@ -272,24 +288,22 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
           {/* Expandable Long-Term Director Memory Vault */}
           {showMemories && (
             <div className="bg-purple-950/25 border border-purple-500/40 rounded-xl p-3.5 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <div className="text-purple-200 font-bold flex items-center gap-1.5">
-                    <Brain className="w-4 h-4 text-purple-400" />
-                    AI 导演长期记忆库（跨视频自动生效 · 越聊越懂你）
-                  </div>
-                  <p className="text-[11px] text-slate-400 mt-0.5">
-                    每次你发修改意见，AI 会自动提炼你的人物审美、场景调性、产品替换巧思与改写纪律，下次拆解新视频首版就会直接运用！
-                  </p>
+              <div>
+                <div className="text-purple-200 font-bold flex items-center gap-1.5">
+                  <Brain className="w-4 h-4 text-purple-400" />
+                  AI 长期记忆库（越聊越懂你的替换手法与审美偏好）
                 </div>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  每次你发修改意见，系统会自动提炼你的人物审美、奢华场景调性与产品替换巧思，以后改写新视频会自动参考（同时严格遵守“未提及处不变”）。
+                </p>
               </div>
 
               {memories.length === 0 ? (
                 <div className="text-[11px] text-slate-400 bg-slate-950/60 rounded-lg px-3 py-2.5">
-                  还没有沉淀记忆。只要在下方和 AI 导演聊 1 次你的想法（或者直接在下面手动写一条铁律），系统就会永久记住并在以后每个视频自动运用！
+                  暂无记忆。在下方发一次你的修改想法，或者手动添加一条偏好，系统就会自动记住！
                 </div>
               ) : (
-                <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+                <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
                   {memories.map((m) => {
                     const meta =
                       MEMORY_CATEGORY_LABELS[m.category] ||
@@ -308,11 +322,6 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                             <span className={`px-1.5 py-0.5 rounded border text-[10px] ${meta.cls}`}>
                               {meta.label}
                             </span>
-                            {m.product_scope && m.product_scope !== "global" && (
-                              <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 text-[10px]">
-                                适用：{m.product_scope}
-                              </span>
-                            )}
                             {m.confidence_hits > 1 && (
                               <span className="text-[10px] text-emerald-300 font-semibold">
                                 强化 ×{m.confidence_hits}
@@ -320,11 +329,6 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                             )}
                           </div>
                           <div className="text-slate-100 leading-relaxed">{m.rule_summary}</div>
-                          {m.example_snippet && (
-                            <div className="text-[10px] text-slate-400 truncate">
-                              案例：{m.example_snippet}
-                            </div>
-                          )}
                         </div>
                         <div className="flex items-center gap-1.5 shrink-0">
                           <button
@@ -338,7 +342,6 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                             type="button"
                             onClick={() => handleDeleteMemory(m.id)}
                             className="p-1 rounded bg-slate-800 hover:bg-rose-500/20 text-slate-400 hover:text-rose-300"
-                            title="删除该记忆"
                           >
                             <Trash2 className="w-3 h-3" />
                           </button>
@@ -349,7 +352,6 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                 </div>
               )}
 
-              {/* Manual quick-add memory row */}
               <div className="flex flex-wrap sm:flex-nowrap items-center gap-1.5 pt-1 border-t border-purple-500/20">
                 <select
                   value={newRuleCategory}
@@ -366,7 +368,7 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                   type="text"
                   value={newRuleText}
                   onChange={(e) => setNewRuleText(e.target.value)}
-                  placeholder="手动教导演一条长期偏好（如：优先使用欧美贵妇+奢华高端空间；未提及部分绝不改动）"
+                  placeholder="手动添加一条长期偏好（如：优先使用欧美贵妇+奢华空间；未提及部分绝不改动）"
                   className="flex-1 min-w-[180px] px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-[11px] text-slate-100 placeholder-slate-500"
                 />
                 <button
@@ -382,117 +384,116 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
             </div>
           )}
 
-          {/* Top 3 Director Summary Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-3 space-y-1">
-              <div className="text-sky-300 font-semibold">🎬 原爆款 1:1 情节还原</div>
-              <p className="text-slate-200 leading-relaxed">
-                {plan?.original_plot_summary ||
-                  analysis?.structure?.pacing_curve ||
-                  "保留原爆款视频的分镜顺序、场景氛围与转场节奏。"}
-              </p>
-            </div>
-
-            <div className="bg-slate-950/90 border border-purple-500/30 rounded-xl p-3 space-y-1">
-              <div className="text-purple-300 font-semibold flex items-center gap-1">
-                <UserRound className="w-3.5 h-3.5" />
-                替换用 AI 原创人物（全片统一）
+          {/* Genuine Original Video Filmstrip Previews (from 0.15s Frame 1 to End) */}
+          {keyframes.length > 0 && (
+            <div className="space-y-1.5">
+              <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
+                <Film className="w-3.5 h-3.5 text-sky-400" />
+                原视频真实画面截帧（已从 0.1 秒第一帧起提取，供你核对原片内容）：
               </div>
-              <p className="text-slate-200 leading-relaxed">
-                {plan?.ai_character_profile_cn ||
-                  "若原片有人物，可在下方直接指定你想要替换的新 AI 人物形象（如年龄/性别/穿搭），绝不照搬原片真人。"}
-              </p>
-            </div>
-
-            <div className="bg-slate-950/90 border border-emerald-500/30 rounded-xl p-3 space-y-1">
-              <div className="text-emerald-300 font-semibold">🔄 导演产品植入与改写建议</div>
-              <p className="text-slate-200 leading-relaxed">
-                {plan?.product_placement_plan ||
-                  analysis?.replaceability?.replacement_strategy ||
-                  "已规划各分镜的保留/替换方案，详见下方逐镜对照表。"}
-              </p>
-            </div>
-          </div>
-
-          {/* Shot-by-Shot 1:1 Comparison & Director Advice */}
-          <div className="space-y-2">
-            <div className="font-semibold text-slate-300">
-              逐镜 1:1 复刻与替换规划（确认好再点「确认定稿」）：
-            </div>
-            <div className="space-y-2">
-              {storyboard.map((shot) => {
-                const badge =
-                  ACTION_BADGE[shot.replication_action || "insert_product"] ||
-                  ACTION_BADGE.insert_product;
-                const justChanged = recentChangedShots.includes(shot.shot_no);
-                return (
-                  <div
-                    key={shot.shot_no}
-                    className={`rounded-xl p-3 border space-y-1.5 ${
-                      justChanged
-                        ? "bg-sky-500/10 border-sky-400/60"
-                        : "bg-slate-950/80 border-slate-800"
-                    }`}
-                  >
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 font-bold">
-                        分镜 {shot.shot_no}
-                      </span>
-                      <span className="font-mono text-slate-400">{shot.time_range}</span>
-                      <span className={`px-2 py-0.5 rounded border text-[11px] font-medium ${badge.cls}`}>
-                        {badge.label}
-                      </span>
-                      {shot.has_person && (
-                        <span className="px-2 py-0.5 rounded bg-purple-500/20 border border-purple-500/30 text-purple-200 text-[11px]">
-                          👤 含统一 AI 人物
-                        </span>
-                      )}
-                      {justChanged && (
-                        <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[11px] font-bold">
-                          ✨ 刚已按你意见更新
-                        </span>
-                      )}
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-0.5">
-                      <div className="bg-slate-900/70 rounded-lg p-2 text-slate-400">
-                        <span className="text-slate-500 font-medium">原片画面：</span>
-                        {shot.original_visual}
-                      </div>
-                      <div className="bg-slate-900 rounded-lg p-2 text-slate-100">
-                        <span className="text-emerald-300 font-medium">复刻后本镜画面：</span>
-                        {shot.adapted_visual_for_product}
-                      </div>
-                    </div>
-
-                    {shot.director_advice && (
-                      <div className="text-[11px] text-amber-200/90">
-                        💡 <b>导演建议：</b>
-                        {shot.director_advice}
-                      </div>
-                    )}
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {keyframes.map((src, idx) => (
+                  <div key={idx} className="relative shrink-0">
+                    <img
+                      src={src}
+                      alt={`原片画面 ${idx + 1}`}
+                      className="h-24 w-auto rounded-lg border border-slate-700 object-cover"
+                    />
+                    <span className="absolute bottom-1 left-1 px-1.5 py-0.5 rounded bg-black/70 text-[9px] text-slate-200">
+                      {idx === 0 ? "开场首帧" : `画面 ${idx + 1}`}
+                    </span>
                   </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Director Questions + Quick Reply Chips */}
-          {questions.length > 0 && (
-            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 space-y-1.5">
-              <div className="text-sky-300 font-semibold">🙋 AI 导演想和你确认：</div>
-              {questions.map((q, idx) => (
-                <div key={idx} className="text-slate-300">
-                  {idx + 1}. {q}
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
           )}
 
-          {/* Co-creation Chat History */}
+          {/* Unified Clean Video Prompt Box */}
+          <div className="bg-slate-950/95 border border-slate-800 rounded-xl p-4 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span
+                  className={`px-2.5 py-0.5 rounded-md font-bold text-[11px] ${
+                    hasCustomized
+                      ? "bg-emerald-500/20 border border-emerald-500/40 text-emerald-300"
+                      : "bg-sky-500/20 border border-sky-500/40 text-sky-300"
+                  }`}
+                >
+                  {hasCustomized
+                    ? "✨ 按你意见重新编写后的视频提示词"
+                    : "📄 原视频 1:1 画面还原提示词（未改动）"}
+                </span>
+                {hasCustomized && (
+                  <span className="text-[11px] text-slate-400">
+                    （你没提及的画面、坐姿与情节已严格保持原视频不变）
+                  </span>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 text-[11px]">
+                {hasCustomized && (
+                  <button
+                    type="button"
+                    onClick={() => setShowOriginalRef((v) => !v)}
+                    className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 inline-flex items-center gap-1"
+                  >
+                    <Eye className="w-3 h-3 text-sky-400" />
+                    {showOriginalRef ? "收起原片初始词" : "对照原片初始词"}
+                  </button>
+                )}
+                {currentPromptEn && (
+                  <button
+                    type="button"
+                    onClick={() => setShowEnglishPrompt((v) => !v)}
+                    className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-200"
+                  >
+                    {showEnglishPrompt ? "收起英文" : "英文 Prompt"}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setManualEditing((v) => !v)}
+                  className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 inline-flex items-center gap-1"
+                >
+                  <Edit3 className="w-3 h-3 text-amber-400" />
+                  {manualEditing ? "取消手改" : "手动微调文字"}
+                </button>
+              </div>
+            </div>
+
+            {manualEditing ? (
+              <textarea
+                rows={5}
+                value={manualTextCn}
+                onChange={(e) => setManualTextCn(e.target.value)}
+                className="w-full p-3 rounded-xl bg-slate-900 border border-amber-500/40 text-xs sm:text-sm text-slate-100 leading-relaxed focus:outline-none"
+              />
+            ) : (
+              <div className="text-xs sm:text-sm text-slate-100 leading-relaxed whitespace-pre-wrap bg-slate-900/70 rounded-xl p-3.5 border border-slate-800/80">
+                {currentPromptCn}
+              </div>
+            )}
+
+            {showOriginalRef && hasCustomized && (
+              <div className="bg-slate-900/40 border border-slate-800 rounded-xl p-3 space-y-1">
+                <div className="text-[11px] text-slate-400 font-semibold">原视频初始还原提示词：</div>
+                <div className="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap">
+                  {fallbackOriginalPrompt}
+                </div>
+              </div>
+            )}
+
+            {showEnglishPrompt && currentPromptEn && (
+              <div className="bg-slate-900/40 border border-slate-800 rounded-xl p-3 font-mono text-[11px] text-slate-300 leading-relaxed whitespace-pre-wrap">
+                {currentPromptEn}
+              </div>
+            )}
+          </div>
+
+          {/* Multi-turn Revision Conversation History */}
           {history.length > 0 && (
-            <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-3 space-y-2 max-h-56 overflow-y-auto">
-              <div className="text-[11px] text-slate-400 font-semibold">共创修改记录：</div>
+            <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-3 space-y-2 max-h-52 overflow-y-auto">
+              <div className="text-[11px] text-slate-400 font-semibold">历次修改记录：</div>
               {history.map((msg, i) => (
                 <div
                   key={i}
@@ -503,7 +504,7 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                   }`}
                 >
                   <div className="flex items-center justify-between text-[10px] opacity-70 mb-0.5">
-                    <span>{msg.role === "user" ? "你的修改意见" : "🎬 AI 导演回复"}</span>
+                    <span>{msg.role === "user" ? "你的修改意见" : "🤖 AI 改写反馈"}</span>
                     <span>{msg.timestamp || ""}</span>
                   </div>
                   <div>{msg.message}</div>
@@ -524,32 +525,14 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
             </div>
           )}
 
-          {/* Interactive Feedback Input */}
+          {/* Direct User Feedback Input + Two Primary Actions */}
           <div className="space-y-2 pt-1">
-            <div className="flex flex-wrap gap-1.5">
-              <span className="text-[11px] text-slate-400 self-center">常用指令示例：</span>
-              {[
-                "把人物换成25岁亚洲时尚女生，穿黑色极简西装",
-                "把我的产品提前到第2镜就正式特写亮相",
-                "第1镜完全1:1保留原片场景和悬念，先不要露出我的产品",
-                "口播文案改得更简短有力、更有悬念感",
-              ].map((sample) => (
-                <button
-                  key={sample}
-                  type="button"
-                  onClick={() =>
-                    setFeedback((prev) => (prev.trim() ? `${prev}；${sample}` : sample))
-                  }
-                  className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-[11px] text-slate-300 transition"
-                >
-                  + {sample}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex flex-col sm:flex-row gap-2">
+            <label className="block text-xs font-semibold text-sky-200">
+              👇 告诉 AI 你想怎么改（只改你提到的元素、人物或替换为上传的商品；你没提到的地方将 100% 保持原视频不变，可连续多轮修改直到满意）：
+            </label>
+            <div className="flex flex-col sm:flex-row gap-2.5">
               <textarea
-                rows={2}
+                rows={3}
                 value={feedback}
                 onChange={(e) => setFeedback(e.target.value)}
                 onKeyDown={(e) => {
@@ -558,31 +541,31 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                     handleSendFeedback();
                   }
                 }}
-                placeholder="直接告诉 AI 导演你想怎么改（例如：人物换成年轻帅气男生、产品放第2和第4镜、第3镜保持原片客厅场景别改...）"
-                className="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 focus:border-sky-400 focus:outline-none text-xs text-slate-100 placeholder-slate-500"
+                placeholder="例如：把飞机变成豪华私人飞机，换成一位欧美的漂亮贵妇坐在机舱里，把一张缩小版的我上传的沙发往火山口扔下去，爆炸弹上来变成正常尺寸的我上传的沙发，正好落回飞机客舱客厅（前面有个茶几），展示奢华时尚感，我没提及的地方不要改。"
+                className="flex-1 px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 focus:border-sky-400 focus:outline-none text-xs sm:text-sm text-slate-100 placeholder-slate-500 leading-relaxed"
               />
-              <div className="flex sm:flex-col gap-2 shrink-0">
+              <div className="flex sm:flex-col gap-2 shrink-0 sm:w-48">
                 <button
                   type="button"
                   disabled={revising || !feedback.trim()}
                   onClick={handleSendFeedback}
-                  className="flex-1 px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-slate-950 font-bold text-xs inline-flex items-center justify-center gap-1.5"
+                  className="flex-1 px-4 py-2.5 rounded-xl bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-slate-950 font-bold text-xs inline-flex items-center justify-center gap-1.5"
                 >
                   {revising ? (
-                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <Loader2 className="w-4 h-4 animate-spin" />
                   ) : (
-                    <Send className="w-3.5 h-3.5" />
+                    <Send className="w-4 h-4" />
                   )}
-                  {revising ? "AI 改稿中..." : "让 AI 导演修改"}
+                  {revising ? "正在重新编写..." : "按我意见重新编写"}
                 </button>
                 <button
                   type="button"
                   disabled={locking}
                   onClick={() => handleToggleLock(true)}
-                  className="flex-1 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-bold text-xs inline-flex items-center justify-center gap-1.5"
+                  className="flex-1 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-bold text-xs inline-flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/20"
                 >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  满意，确认定稿
+                  <Sparkles className="w-4 h-4" />
+                  确认没问题，开始生成
                 </button>
               </div>
             </div>

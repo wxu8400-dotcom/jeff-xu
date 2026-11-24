@@ -127,7 +127,11 @@ export const api = {
       method: "DELETE",
     }),
 
-  lockDirectorPlan: (videoId: string, locked: boolean) =>
+  lockDirectorPlan: (
+    videoId: string,
+    locked: boolean,
+    overrides?: { master_prompt_cn?: string; master_prompt_en?: string }
+  ) =>
     apiFetch<{
       ok: boolean;
       revision_status: string;
@@ -135,7 +139,7 @@ export const api = {
     }>(`/api/studio/videos/${encodeURIComponent(videoId)}/lock-plan`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ locked }),
+      body: JSON.stringify({ locked, ...(overrides || {}) }),
     }),
 
   uploadProductReference: (videoId: string, file: File) => {
