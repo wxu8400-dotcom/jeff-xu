@@ -161,11 +161,12 @@ def build_deep_analysis_prompt(
 【最高铁律：第一步只做 100% 忠实的「原视频画面与提示词还原」，绝不擅自改写剧本！】
 用户的核心工作流是：**你先把原视频从头到尾的真实画面还原成精准的「原视频提示词」展示给用户 → 然后等用户说出他想替换的人物/场景/物品 → 用户没提到的地方全部保持原视频不变！**
 因此在本步骤中，你必须严格遵守：
-1. **死盯第 1 帧（0.1 秒开场）到最后一帧的真实画面**：
-   - 仔细看清开场第一帧：人物是谁、**坐在哪里还是站在哪里**（例如坐在飞机客舱里、坐在车里、站在街上）、窗外或背景是什么、手里拿着什么物品、做了什么动作（如往窗外/火山口扔下某物）、随后发生了什么爆炸/弹出/转场变化、最后落在什么地方！
-   - **严禁凭空脑补原视频没有的东西**（看不清的细节如实按视觉外观描述，绝不胡编“炸鸡”等无关物品）！
-2. **输出整段连贯的《原视频完整还原提示词》（不要写“分镜1、分镜2”字样！）**：
-   - `director_plan.original_video_prompt_cn`：用一段自然连贯、画面感极强、可直接用于生成同款视频的完整中文提示词，从开场第一秒顺畅描述到最后一秒（写清环境、光影、人物外貌穿搭与坐姿/站位、机位视角、手中物品、动作过程与结局画面，**此时不要把用户的商品塞进去，保持 100% 原视频原貌！**）；
+1. **死盯第 1 帧（0.1 秒开场）到最后 1 帧（结尾反转）的每一张画面，绝不遗漏结尾！**：
+   - 仔细看清开场第一帧：人物是谁、**坐在哪里还是站在哪里**（例如坐在开着舱门的直升机里、坐在车里、站在街上）、窗外或背景是什么、手里拿着什么物品、做了什么动作（如往窗外/火山口倾倒或扔下某物）；
+   - 仔细看清中段与**最后一张结尾画面**：掉落后发生了什么变化、火山/场景怎么反应、**最终结尾画面出现了什么结果或反转**（例如最后变成了成堆的炸鸡弹出/落满画面等）——**必须完整写到最后一张画面为止，绝不能在中途截断！**
+   - **严禁凭空脑补原视频没有的东西**，也严禁漏掉最后几秒的关键结尾画面！
+2. **输出整段连贯完整的《原视频完整还原提示词》（不要写“分镜1、分镜2”字样！）**：
+   - `director_plan.original_video_prompt_cn`：用一段自然连贯、细节完整（覆盖开头→中段→结尾全部画面，约 120~260 字）、可直接用于生成同款视频的完整中文提示词，从开场第一秒顺畅描述到最后一秒（写清环境、光影、人物外貌穿搭与坐姿/站位、机位视角、手中物品、动作过程与**最终结尾画面**，**此时不要把用户的商品塞进去，保持 100% 原视频原貌！**）；
    - `director_plan.original_video_prompt_en`：与上面完全对应的照片级写实英文完整提示词（包含 `photorealistic live-action cinema footage, natural skin texture`）；
    - `director_plan.current_master_prompt_cn`：初始值与 `original_video_prompt_cn` 完全一致；
    - `director_plan.current_master_prompt_en`：初始值与 `original_video_prompt_en` 完全一致；
@@ -284,47 +285,79 @@ def build_director_revision_prompt(
     revision_history: list[dict[str, Any]],
     director_memory_block: str = "",
 ) -> str:
-    dna_json = json.dumps(product_dna.model_dump(), ensure_ascii=False, indent=2)
-    curr_json = json.dumps(current_analysis, ensure_ascii=False, indent=2)
-    hist_json = json.dumps(revision_history[-8:], ensure_ascii=False, indent=2)
+    # Build a clean, compact context WITHOUT any base64 keyframe_previews!
+    curr_plan = dict(current_analysis.get("director_plan") or {})
+    orig_cn = str(
+        curr_plan.get("original_video_prompt_cn")
+        or curr_plan.get("original_plot_summary")
+        or ""
+    )
+    prev_cn = str(curr_plan.get("current_master_prompt_cn") or orig_cn)
+    prev_char_cn = str(curr_plan.get("ai_character_profile_cn") or "")
+    prev_char_en = str(curr_plan.get("ai_character_profile_en") or "")
+
+    compact_ctx = {
+        "original_video_prompt_cn": orig_cn,
+        "previous_master_prompt_cn": prev_cn,
+        "previous_ai_character_cn": prev_char_cn,
+        "previous_ai_character_en": prev_char_en,
+        "storyboard_count": max(2, len(current_analysis.get("storyboard") or [])),
+    }
+    dna_json = json.dumps(
+        {
+            "product_name": product_dna.product_name,
+            "category": product_dna.category,
+            "physical_form": product_dna.physical_form,
+            "core_selling_points": product_dna.core_selling_points[:3],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    ctx_json = json.dumps(compact_ctx, ensure_ascii=False, indent=2)
+    hist_json = json.dumps(revision_history[-6:], ensure_ascii=False, indent=2)
     memory_section = f"\n\n{director_memory_block}\n" if director_memory_block.strip() else ""
 
     return f"""你是用户的专属**视频提示词精准改写助手**。
-系统已经把原爆款视频还原成了 `director_plan.original_video_prompt_cn`（以及上一轮改写后的 `director_plan.current_master_prompt_cn`）。现在用户给出了他的修改意见，请你**严格在上一版提示词的基础上做「手术刀式局部替换」**！{memory_section}
+用户刚刚提交了他的最新修改内容（用户可能是直接把原视频提示词复制下来做了局部增删改写，也可能是写了一段修改要求）。请你**100% 严格落实用户的最新修改内容**，生成干净完整的确认版中英文提示词，并静默同步底层的生图与可灵视频指令！{memory_section}
 
 【绝对不可违背的 5 条铁律】
-1. **没提的地方 100% 原封不动！（最高优先级！）**
-   - 保持原视频完整的画面框架、人物坐姿/站位、镜头顺序、机位视角与动作逻辑不变，**只替换用户明确提到的元素**！
-   - 反面教材警告：如果原片第一帧人物是“坐在飞机客舱里”，用户说“把飞机换成豪华私人飞机、人物换成欧美漂亮贵妇、往火山口扔缩小版沙发……”，那么第一帧**必须依然是这位欧美漂亮贵妇坐在豪华私人飞机客舱里**，绝对不准擅自把她改到地面或火山边站着！
-   - 如果这是用户的第 2 轮、第 3 轮修改，必须在上一轮 `current_master_prompt_cn` 已改好的基础上继续微调用户新指出的点，不要把上一轮改好的内容丢掉！
-2. **绝不跟用户啰嗦“第几个分镜”！**
-   - `director_plan.current_master_prompt_cn` 和 `director_plan.current_master_prompt_en` 必须写成**一整段自然连贯、画面细节饱满的完整视频提示词**（按画面发生先后一气呵成，**严禁在里面写“分镜1 / 分镜2 / 第一镜”等拆分标题**）！
-   - `director_reply` 只用 1~2 句干净利落的话回复用户（例如：“已按你的意见将飞机替换为带茶几的豪华私人飞机客舱客厅、人物替换为欧美漂亮贵妇，并将抛下与弹回的物品替换为你上传的【{product_dna.product_name}】，未提及的画面细节全部保持原视频不变。请查看上方新提示词，还有想调的可继续告诉我，满意点「确认没问题，开始生成」即可！”）——**严禁在 `director_reply` 里提“分镜1、分镜2、第几镜”**！
-   - 将 `director_plan.has_user_customized` 设为 `true`，且保留原有的 `original_video_prompt_cn`、`original_video_prompt_en` 和 `keyframe_previews` 不变！
+1. **100% 忠实落实用户提交的每一个细节，未提改动处严格保留原视频框架！**
+   - 如果用户已经把整段提示词改写好发给你（例如把“直升机”改成“开着机舱门的豪华客机”、把“白裙女性”改成“黑色连衣裙身材苗条的贵妇”、把“生鸡肉托盘”改成“手持缩小版沙发没有托盘”、增加了“最后正常尺寸沙发弹上来落在科技感会客区内，贵妇走过去坐在沙发上开怀大笑”），你必须**一字不漏地完整采纳用户的所有改动与新增情节**，把语病/错别字顺滑润色（如“猫着烟火”→“冒着烟火”），输出一份画面感极强的完整新版提示词！
+   - 用户没提改动的地方（如开场人物坐在机舱内、窗外山脉蓝天、火山口熔岩烟雾与火焰效果等）必须原封不动保留，绝不把人物乱改到地上！
+2. **绝不跟用户讲“第几个分镜 / 分镜1 / 分镜2”！**
+   - `current_master_prompt_cn` 和 `current_master_prompt_en` 必须是一整段自然连贯、从头到尾完整描述的提示词（严禁写“分镜1/2/3”标题）；
+   - `director_reply` 用 1~2 句简洁自然的话回复用户确认改好了哪些核心变化，**禁止出现“分镜几”字样**！
 3. **精准融入用户上传的商品特征**：
-   - 凡是出现用户商品的地方，具体写出【{product_dna.product_name}】（外观特征：{product_dna.physical_form}），严禁写 `[你的产品]` 等占位符；
-   - 如果用户指定某处是“缩小版/迷你版商品”，英文提示词写明 `a miniature palm-sized version of the exact product from the uploaded reference image ({product_dna.product_name}, {product_dna.physical_form})`；正常尺寸写明 `Keep the exact full-size product from the uploaded reference image ({product_dna.product_name}, {product_dna.physical_form}, 100% unchanged)`。
-4. **静默同步底层执行数组（供用户点确认后一键生图/生可灵视频自动读取）**：
-   - 将改写后的连贯提示词同步拆分更新到底层 JSON 的 `storyboard`、`chatgpt_images_prompts`（索引 0 为海报，索引 1..N 对应 `storyboard` 1..N；有用户商品出现的段落标 `replication_action: "insert_product"` 并在 `prompt_en` 开头带 `Keep the exact product from the uploaded reference image...`，没有商品出现的纯环境/铺垫段标 `replication_action: "keep_scene"`；有人物的段标 `has_person: true` 并在 `director_plan.ai_character_profile_cn/en` 及各段 `prompt_en` 中锁定同一套写实真人外貌与穿搭！）和 `kling_prompts`！
-5. **自动沉淀长期记忆（`learned_memories`）**：
-   - 从用户本次意见中提炼 0~2 条可复用的创作偏好规则（`character` / `scene_style` / `product_replacement` / `pacing_framing` / `taboo`）。
+   - 凡出现用户商品（如沙发）处，写清【{product_dna.product_name}】（{product_dna.physical_form}），严禁占位符；
+   - 若用户要求某段是“缩小版/迷你版商品”，英文生图提示词写明 `a miniature palm-sized version of the exact product from the uploaded reference image ({product_dna.product_name}, {product_dna.physical_form})`；正常尺寸写明 `Keep the exact full-size product from the uploaded reference image ({product_dna.product_name}, {product_dna.physical_form}, 100% unchanged)`。
+4. **静默同步底层执行数组（供用户点确认后一键生图/生可灵视频使用）**：
+   - 将新版完整提示词拆成 3~4 个按时间顺序自然衔接的画面段落写入 `storyboard`（每段 `shot_no` 为 1..N，标好 `has_person` 和 `replication_action`：含用户商品标 `"insert_product"`，纯火山/无商品环境段标 `"keep_scene"`）；
+   - `chatgpt_images_prompts`：索引 0 为主视觉封面，索引 1..N 严格一一对应 `storyboard` 1..N；每个有人物的段落英文提示词必须复用完全一致的 `ai_character_profile_en`（写实真人，绝非卡通动漫）；
+   - `kling_prompts`：严格一一对应 `storyboard` 1..N，每段 5 秒平滑衔接。
+5. **自动沉淀 0~2 条长期记忆（`learned_memories`）**。
 
-用户上传的目标商品基因卡：
+用户上传的目标商品：
 {dna_json}
 
-历次修改对话记录：
+原视频与上一版提示词基准：
+{ctx_json}
+
+最近修改记录：
 {hist_json}
 
-当前完整数据 JSON（含原视频基准提示词与上一轮提示词）：
-{curr_json}
-
-用户的最新修改意见（只改这里提到的内容，没提的一字不改！）：
+用户本次提交的最新修改内容（最高优先级，必须 100% 完整落实！）：
 {user_feedback}
 
-请严格输出纯 JSON（不要附加任何说明文字），结构如下：
+请严格输出纯 JSON（不要附加任何多余文字），结构如下：
 {{
-  "director_reply": "简洁自然的确认回复（严禁提'分镜几'）",
-  "changed_shots": [1],
+  "director_reply": "1~2句简洁确认回复（严禁出现'分镜'二字）",
+  "changed_shots": [1, 2, 3],
+  "current_master_prompt_cn": "按用户最新意见重新编写并润色好的完整连贯中文视频提示词（覆盖开头到结尾全部画面，不写分镜编号）",
+  "current_master_prompt_en": "Complete cohesive English photorealistic video prompt covering opening frame to ending frame",
+  "ai_character_profile_cn": "全片统一的写实 AI 人物中文设定",
+  "ai_character_profile_en": "Consistent photorealistic real human English character profile",
+  "adapted_script_cn": "简短配套中文口播（若原片纯画面无口播可简短写一句高冲击文案）",
+  "adapted_script_en": "Short matching English voiceover line",
   "learned_memories": [
     {{
       "category": "product_replacement",
@@ -333,7 +366,48 @@ def build_director_revision_prompt(
       "example_snippet": "本次创意简述"
     }}
   ],
-  "analysis": {{
-    "...完整更新后的 VideoDeepAnalysis 对象（含更新后的 director_plan.current_master_prompt_cn/en 且 has_user_customized=true，以及静默同步好的 storyboard / chatgpt_images_prompts / kling_prompts）..."
-  }}
+  "storyboard": [
+    {{
+      "shot_no": 1,
+      "time_range": "00:00-00:05",
+      "shot_size": "中景",
+      "camera_movement": "跟随微推",
+      "original_visual": "对应原片画面",
+      "adapted_visual_for_product": "按用户意见替换后的该段具体画面",
+      "audio_sfx": "环境音与音效",
+      "production_mode": "ai",
+      "real_shoot_guide": "实拍参考",
+      "spoken_line": "",
+      "replication_action": "insert_product",
+      "director_advice": "",
+      "has_person": true
+    }}
+  ],
+  "chatgpt_images_prompts": [
+    {{
+      "scene_title": "主视觉封面图",
+      "usage_note": "自动融合上传的商品图",
+      "aspect_ratio": "9:16",
+      "prompt_en": "Keep the exact product from the uploaded reference image...",
+      "prompt_cn": "保持上传商品图外观一致..."
+    }},
+    {{
+      "scene_title": "画面 1 首帧图",
+      "usage_note": "对应开场画面",
+      "aspect_ratio": "9:16",
+      "prompt_en": "Photorealistic vertical 9:16 frame...",
+      "prompt_cn": "写实竖屏 9:16 画面..."
+    }}
+  ],
+  "kling_prompts": [
+    {{
+      "shot_no": 1,
+      "scene_title": "画面 1 动态视频",
+      "mode": "图生视频 (I2V)",
+      "recommended_params": "时长: 5s | 画质: 高品质",
+      "prompt_cn": "完整中文动作与运镜提示词",
+      "prompt_en": "Complete English motion & camera prompt for Kling AI",
+      "negative_prompt": "变形, 模糊, 卡通, 动漫, 穿模, 多余手指, 闪烁, 水印, 杂乱文字"
+    }}
+  ]
 }}"""

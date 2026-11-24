@@ -773,20 +773,49 @@ async def revise_director_plan(
         }
     )
 
-    updated_dict = rev_res.analysis.model_dump()
-    updated_plan = dict(updated_dict.get("director_plan") or {})
-    # Never lose immutable original video baseline prompt or extracted filmstrip previews!
-    if curr_plan.get("original_video_prompt_cn") and not updated_plan.get("original_video_prompt_cn"):
+    # Merge lean revision response cleanly back into curr_analysis so we NEVER lose
+    # keyframe_previews, original_video_prompt_cn/en, structure, or shooting_requirements!
+    if rev_res.analysis is not None:
+        updated_dict = rev_res.analysis.model_dump()
+    else:
+        updated_dict = dict(curr_analysis)
+
+    updated_plan = dict(updated_dict.get("director_plan") or curr_plan)
+    if curr_plan.get("original_video_prompt_cn"):
         updated_plan["original_video_prompt_cn"] = curr_plan["original_video_prompt_cn"]
-    if curr_plan.get("original_video_prompt_en") and not updated_plan.get("original_video_prompt_en"):
+    if curr_plan.get("original_video_prompt_en"):
         updated_plan["original_video_prompt_en"] = curr_plan["original_video_prompt_en"]
     if curr_plan.get("keyframe_previews"):
         updated_plan["keyframe_previews"] = curr_plan["keyframe_previews"]
+
+    if rev_res.current_master_prompt_cn.strip():
+        updated_plan["current_master_prompt_cn"] = rev_res.current_master_prompt_cn.strip()
+    if rev_res.current_master_prompt_en.strip():
+        updated_plan["current_master_prompt_en"] = rev_res.current_master_prompt_en.strip()
+    if rev_res.ai_character_profile_cn.strip():
+        updated_plan["ai_character_profile_cn"] = rev_res.ai_character_profile_cn.strip()
+    if rev_res.ai_character_profile_en.strip():
+        updated_plan["ai_character_profile_en"] = rev_res.ai_character_profile_en.strip()
+
     if not updated_plan.get("current_master_prompt_cn"):
-        updated_plan["current_master_prompt_cn"] = " ".join(
-            s.get("adapted_visual_for_product") or ""
-            for s in (updated_dict.get("storyboard") or [])
-        ).strip()
+        updated_plan["current_master_prompt_cn"] = feedback
+
+    if rev_res.storyboard:
+        updated_dict["storyboard"] = [s.model_dump() for s in rev_res.storyboard]
+    if rev_res.chatgpt_images_prompts:
+        updated_dict["chatgpt_images_prompts"] = [
+            p.model_dump() for p in rev_res.chatgpt_images_prompts
+        ]
+    if rev_res.kling_prompts:
+        updated_dict["kling_prompts"] = [k.model_dump() for k in rev_res.kling_prompts]
+    if rev_res.adapted_script_cn.strip() or rev_res.adapted_script_en.strip():
+        copy_dict = dict(updated_dict.get("copywriting") or {})
+        if rev_res.adapted_script_cn.strip():
+            copy_dict["adapted_script_cn"] = rev_res.adapted_script_cn.strip()
+        if rev_res.adapted_script_en.strip():
+            copy_dict["adapted_script_en"] = rev_res.adapted_script_en.strip()
+        updated_dict["copywriting"] = copy_dict
+
     updated_plan["has_user_customized"] = True
     updated_plan["revision_status"] = "draft"
     updated_plan["revision_history"] = new_history

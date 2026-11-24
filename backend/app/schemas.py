@@ -153,8 +153,17 @@ class LearnedMemoryItem(BaseModel):
 class DirectorRevisionResponse(BaseModel):
     director_reply: str = ""
     changed_shots: list[int] = Field(default_factory=list)
+    current_master_prompt_cn: str = ""
+    current_master_prompt_en: str = ""
+    ai_character_profile_cn: str = ""
+    ai_character_profile_en: str = ""
+    storyboard: list[StoryboardShot] = Field(default_factory=list)
+    chatgpt_images_prompts: list[ChatGPTImagePrompt] = Field(default_factory=list)
+    kling_prompts: list[KlingVideoPrompt] = Field(default_factory=list)
+    adapted_script_cn: str = ""
+    adapted_script_en: str = ""
     learned_memories: list[LearnedMemoryItem] = Field(default_factory=list)
-    analysis: VideoDeepAnalysis
+    analysis: VideoDeepAnalysis | None = None
 
 
 class DirectorMemoryOut(BaseModel):

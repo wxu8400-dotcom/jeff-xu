@@ -1,9 +1,11 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ArrowDownToLine,
   Brain,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  Copy,
   Edit3,
   Eye,
   Film,
@@ -17,6 +19,7 @@ import {
   Unlock,
 } from "lucide-react";
 import { api } from "../api/client";
+import { copyText } from "../utils/copy";
 import type { DirectorMemoryItem, VideoDeepAnalysis, VideoRecord } from "../types/radar";
 
 interface Props {
@@ -68,11 +71,13 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
   const [expanded, setExpanded] = useState(true);
   const [feedback, setFeedback] = useState("");
   const [revising, setRevising] = useState(false);
+  const [reviseError, setReviseError] = useState("");
   const [locking, setLocking] = useState(false);
   const [showOriginalRef, setShowOriginalRef] = useState(false);
   const [showEnglishPrompt, setShowEnglishPrompt] = useState(false);
   const [manualEditing, setManualEditing] = useState(false);
   const [manualTextCn, setManualTextCn] = useState(currentPromptCn);
+  const feedbackInputRef = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     setManualTextCn(currentPromptCn);
@@ -145,10 +150,11 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
   const handleSendFeedback = async () => {
     const clean = feedback.trim();
     if (!clean) {
-      onToast("请先写下你的修改意见");
+      onToast("请先写下你的修改意见或载入提示词修改后再提交");
       return;
     }
     setRevising(true);
+    setReviseError("");
     try {
       const resp = await api.reviseDirectorPlan(video.id, clean);
       setFeedback("");
@@ -159,10 +165,26 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
       const memHint = memCount > 0 ? `（并自动记住了 ${memCount} 条偏好 🧠）` : "";
       onToast(`✨ 已按你的意见重新编写好提示词${memHint}`);
     } catch (err) {
-      onToast(err instanceof Error ? err.message : "AI 重新编写提示词失败");
+      const msg = err instanceof Error ? err.message : "AI 重新编写提示词失败";
+      setReviseError(msg);
+      onToast(msg);
     } finally {
       setRevising(false);
     }
+  };
+
+  const handleLoadPromptToEditor = () => {
+    setFeedback(currentPromptCn);
+    setReviseError("");
+    onToast("已将完整提示词载入下方修改框，直接改动你想改的词语再点提交即可！");
+    setTimeout(() => {
+      feedbackInputRef.current?.focus();
+    }, 50);
+  };
+
+  const handleCopyPrompt = async () => {
+    const ok = await copyText(currentPromptCn);
+    if (ok) onToast("已复制完整提示词");
   };
 
   const handleToggleLock = async (nextLocked: boolean) => {
@@ -430,7 +452,23 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                 )}
               </div>
 
-              <div className="flex items-center gap-2 text-[11px]">
+              <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                <button
+                  type="button"
+                  onClick={handleLoadPromptToEditor}
+                  className="px-2.5 py-1 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/50 text-sky-200 font-semibold inline-flex items-center gap-1"
+                >
+                  <ArrowDownToLine className="w-3 h-3" />
+                  一键载入下方修改框
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCopyPrompt}
+                  className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 inline-flex items-center gap-1"
+                >
+                  <Copy className="w-3 h-3 text-slate-400" />
+                  复制
+                </button>
                 {hasCustomized && (
                   <button
                     type="button"
@@ -438,7 +476,7 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                     className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 inline-flex items-center gap-1"
                   >
                     <Eye className="w-3 h-3 text-sky-400" />
-                    {showOriginalRef ? "收起原片初始词" : "对照原片初始词"}
+                    {showOriginalRef ? "收起原片词" : "对照原片词"}
                   </button>
                 )}
                 {currentPromptEn && (
@@ -456,7 +494,7 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                   className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 inline-flex items-center gap-1"
                 >
                   <Edit3 className="w-3 h-3 text-amber-400" />
-                  {manualEditing ? "取消手改" : "手动微调文字"}
+                  {manualEditing ? "取消手改" : "手动微调"}
                 </button>
               </div>
             </div>
@@ -528,11 +566,17 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
           {/* Direct User Feedback Input + Two Primary Actions */}
           <div className="space-y-2 pt-1">
             <label className="block text-xs font-semibold text-sky-200">
-              👇 告诉 AI 你想怎么改（只改你提到的元素、人物或替换为上传的商品；你没提到的地方将 100% 保持原视频不变，可连续多轮修改直到满意）：
+              👇 点上方「一键载入下方修改框」把原片完整提示词载入后直接改你想要的词语/增补新画面，或直接写下你的修改意见（可多轮修改直到满意）：
             </label>
+            {reviseError && (
+              <div className="rounded-xl bg-rose-500/15 border border-rose-500/40 px-3 py-2 text-xs text-rose-200">
+                改写失败：{reviseError}（请再点一次「按我意见重新编写」重试）
+              </div>
+            )}
             <div className="flex flex-col sm:flex-row gap-2.5">
               <textarea
-                rows={3}
+                ref={feedbackInputRef}
+                rows={4}
                 value={feedback}
                 onChange={(e) => setFeedback(e.target.value)}
                 onKeyDown={(e) => {
@@ -541,7 +585,7 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                     handleSendFeedback();
                   }
                 }}
-                placeholder="例如：把飞机变成豪华私人飞机，换成一位欧美的漂亮贵妇坐在机舱里，把一张缩小版的我上传的沙发往火山口扔下去，爆炸弹上来变成正常尺寸的我上传的沙发，正好落回飞机客舱客厅（前面有个茶几），展示奢华时尚感，我没提及的地方不要改。"
+                placeholder="可以点上方「一键载入下方修改框」直接把原提示词贴进来改字，也可以直接输入你的修改想法..."
                 className="flex-1 px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 focus:border-sky-400 focus:outline-none text-xs sm:text-sm text-slate-100 placeholder-slate-500 leading-relaxed"
               />
               <div className="flex sm:flex-col gap-2 shrink-0 sm:w-48">

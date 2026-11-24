@@ -431,7 +431,25 @@ def test_director_long_term_memory_auto_extraction_reinforcement_and_crud(make_c
 
 
 def test_first_frame_inclusive_timestamps_and_unified_prompt_workflow(make_client):
+    from app.schemas import ProductDNA
+    from app.services.prompts import build_director_revision_prompt
     from app.services.video_processor import _compute_inclusive_timestamps
+
+    # 0. Revision prompt MUST strip large base64 keyframe_previews so LLM never overflows/fails
+    fake_base64 = "data:image/jpeg;base64," + ("A" * 50_000)
+    rev_prompt = build_director_revision_prompt(
+        product_dna=ProductDNA(product_name="cc 沙发"),
+        current_analysis={
+            "director_plan": {
+                "original_video_prompt_cn": "直升机内白裙女性扔生鸡肉进火山口，最后炸鸡弹出",
+                "keyframe_previews": [fake_base64, fake_base64],
+            }
+        },
+        user_feedback="把直升机改为豪华客机，扔缩小版沙发",
+        revision_history=[],
+    )
+    assert "data:image/jpeg;base64," not in rev_prompt
+    assert len(rev_prompt) < 10_000
 
     # 1. Opening frame (~0.15s) MUST always be Frame 0 so airplane/opening shots are never skipped
     ts_12s = _compute_inclusive_timestamps(12.0, 6)

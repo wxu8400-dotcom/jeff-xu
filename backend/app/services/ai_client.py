@@ -913,12 +913,19 @@ class UnifiedAIClient:
                 )
             return (
                 DirectorRevisionResponse(
-                    director_reply=f"明白！已按你的意见「{feedback}」同步更新了分镜方案、AI 人物设定以及对应的生图/可灵提示词，并已沉淀至长期导演记忆库。你可以检查一下，满意就可以点击「确认定稿」开始按步骤出片啦！",
+                    director_reply=f"已按你的最新修改内容重新编写好完整提示词，未提及的画面细节保持原视频不变，并已记入长期记忆库。请核对上方新提示词，满意即可点击确认生成！",
                     changed_shots=[1],
+                    current_master_prompt_cn=updated.director_plan.current_master_prompt_cn,
+                    current_master_prompt_en=updated.director_plan.current_master_prompt_en,
+                    ai_character_profile_cn=updated.director_plan.ai_character_profile_cn,
+                    ai_character_profile_en=updated.director_plan.ai_character_profile_en,
+                    storyboard=updated.storyboard,
+                    chatgpt_images_prompts=updated.chatgpt_images_prompts,
+                    kling_prompts=updated.kling_prompts,
                     learned_memories=learned,
-                    analysis=updated,
+                    analysis=None,
                 ),
-                TokenUsage(input_tokens=3200, output_tokens=1800),
+                TokenUsage(input_tokens=1800, output_tokens=900),
             )  # type: ignore[return-value]
 
         raise ValueError(f"Unsupported mock schema: {schema_cls}")
