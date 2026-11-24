@@ -214,7 +214,7 @@ class ConfigCheckOut(BaseModel):
     gemini_image_configured: bool = False
     gemini_image_model: str = "gemini-2.5-flash-image"
     openai_image_configured: bool = False
-    openai_image_model: str = "gpt-image-2"
+    openai_image_model: str = "gpt-image-2.6-sunburst"
     kling_configured: bool = False
     kling_model_name: str = "kling-v2-master"
 
@@ -265,11 +265,13 @@ class GenerateImageRequest(BaseModel):
     scene_title: str = ""
     prompt: str
     provider: Literal["gemini", "openai"] | None = None
+    model_override: str = ""
     aspect_ratio: str = "9:16"
 
 
 class GenerateAllImagesRequest(BaseModel):
     provider: Literal["gemini", "openai"] | None = None
+    model_override: str = ""
     only_missing: bool = True
     include_real_shoot_shots: bool = True
     include_poster: bool = True

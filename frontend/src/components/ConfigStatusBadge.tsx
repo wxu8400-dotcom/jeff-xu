@@ -58,7 +58,7 @@ export const ConfigStatusBadge: React.FC<Props> = ({ config }) => {
       ok: Boolean(config.gemini_image_configured || config.openai_image_configured),
       detail: [
         config.gemini_image_configured ? `Gemini(${config.gemini_image_model || "flash-image"}) ✓` : "Gemini 未配",
-        config.openai_image_configured ? `GPT(${config.openai_image_model || "gpt-image-2"}) ✓` : "GPT 未配",
+        config.openai_image_configured ? `GPT(${config.openai_image_model || "gpt-image-2.6-sunburst"}) ✓` : "GPT 未配",
       ].join(" · "),
       optional: true,
     },

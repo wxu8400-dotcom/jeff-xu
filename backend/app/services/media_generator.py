@@ -124,12 +124,13 @@ async def generate_product_image(
     prompt: str,
     ref_images: list[tuple[bytes, str]],
     provider: str | None = None,
+    model_override: str = "",
     aspect_ratio: str = "9:16",
     scene_title: str = "",
     product_name: str = "",
     settings: Settings | None = None,
 ) -> GeneratedImageResult:
-    """Generate a product-fused storyboard frame or poster via Gemini native image or OpenAI gpt-image-1."""
+    """Generate a product-fused storyboard frame or poster via Gemini native image or OpenAI GPT Image 2.6."""
     cfg = settings or get_settings()
     chosen_provider = (provider or cfg.default_image_provider or "gemini").lower()
 
@@ -147,6 +148,7 @@ async def generate_product_image(
             prompt=prompt,
             ref_images=ref_images,
             aspect_ratio=aspect_ratio,
+            model_override=model_override,
         )
     return await _generate_image_gemini(
         cfg=cfg,
@@ -390,19 +392,28 @@ async def _generate_image_openai(
     prompt: str,
     ref_images: list[tuple[bytes, str]],
     aspect_ratio: str,
+    model_override: str = "",
 ) -> GeneratedImageResult:
     api_key = cfg.resolved_openai_image_key()
     if not api_key:
         raise RuntimeError(
-            "尚未配置 OPENAI_IMAGE_API_KEY 或 OPENAI_API_KEY，请在 Render 环境变量中配置后使用 ChatGPT (gpt-image-2) 生图，或切换为 Gemini 生图。"
+            "尚未配置 OPENAI_IMAGE_API_KEY 或 OPENAI_API_KEY，请在 Render 环境变量中配置后使用最新 GPT Image 2.6 (gpt-image-2.6-sunburst) 生图，或切换为 Gemini 生图。"
         )
     base_url = cfg.resolved_openai_image_base_url()
     size = "1024x1536" if aspect_ratio == "9:16" else ("1536x1024" if aspect_ratio == "16:9" else "1024x1024")
     headers = {"Authorization": f"Bearer {api_key}"}
 
-    # Prioritize latest gpt-image-2, with automatic fallback if a relay only exposes earlier IDs
+    # Prioritize latest GPT Image 2.6 (sunburst / flare) -> gpt-image-2 -> earlier fallback
     model_chain: list[str] = []
-    for m in (cfg.openai_image_model, "gpt-image-2", "gpt-image-1.5", "gpt-image-1"):
+    for m in (
+        model_override.strip(),
+        cfg.openai_image_model,
+        "gpt-image-2.6-sunburst",
+        "gpt-image-2.6-flare",
+        "gpt-image-2",
+        "gpt-image-1.5",
+        "gpt-image-1",
+    ):
         if m and m not in model_chain:
             model_chain.append(m)
 

@@ -95,6 +95,7 @@ export const api = {
       scene_title: string;
       prompt: string;
       provider: "gemini" | "openai";
+      model_override?: string;
       aspect_ratio?: string;
     }
   ) =>
@@ -111,6 +112,7 @@ export const api = {
     videoId: string,
     payload: {
       provider: "gemini" | "openai";
+      model_override?: string;
       only_missing?: boolean;
       include_real_shoot_shots?: boolean;
       include_poster?: boolean;

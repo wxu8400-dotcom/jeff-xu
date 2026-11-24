@@ -43,6 +43,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
   const [globalMode, setGlobalMode] = useState<GlobalMode>("all_ai");
   const [shotModeOverrides, setShotModeOverrides] = useState<Record<number, "ai" | "real_shoot">>({});
   const [imageProvider, setImageProvider] = useState<"gemini" | "openai">("gemini");
+  const [openaiModel, setOpenaiModel] = useState<string>("gpt-image-2.6-sunburst");
   const [checkedRealShots, setCheckedRealShots] = useState<Record<number, boolean>>({});
   const [editedPrompts, setEditedPrompts] = useState<Record<number, string>>({});
   const [editingSlot, setEditingSlot] = useState<number | null>(null);
@@ -195,6 +196,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
         scene_title: info.title,
         prompt: info.prompt,
         provider: imageProvider,
+        model_override: imageProvider === "openai" ? openaiModel : "",
         aspect_ratio: info.ratio,
       });
       onToast(`已生成：${info.title}`);
@@ -211,6 +213,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
     try {
       const created = await api.generateAllStudioImages(video.id, {
         provider: imageProvider,
+        model_override: imageProvider === "openai" ? openaiModel : "",
         only_missing: true,
         include_real_shoot_shots: globalMode === "all_ai",
         include_poster: true,
@@ -507,7 +510,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
                 }`}
               >
                 <div className="text-xs font-bold flex items-center justify-between">
-                  <span>ChatGPT 生图</span>
+                  <span>GPT Image 2.6</span>
                   <span
                     className={`text-[10px] px-1.5 py-0.5 rounded ${
                       studio.openai_image_configured
@@ -518,9 +521,32 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
                     {studio.openai_image_configured ? "已就绪" : "需配 Key"}
                   </span>
                 </div>
-                <div className="text-[11px] opacity-80 mt-0.5">gpt-image-2 最新版 官方/中转</div>
+                <div className="text-[11px] opacity-80 mt-0.5">Sunburst / Flare 最新旗舰</div>
               </button>
             </div>
+            {imageProvider === "openai" && (
+              <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                <span className="text-[11px] text-slate-400">模型版本：</span>
+                {[
+                  { id: "gpt-image-2.6-sunburst", label: "2.6 Sunburst（最高画质）" },
+                  { id: "gpt-image-2.6-flare", label: "2.6 Flare（6秒极速）" },
+                  { id: "gpt-image-2", label: "GPT Image 2" },
+                ].map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => setOpenaiModel(m.id)}
+                    className={`px-2 py-1 rounded-lg text-[11px] border transition ${
+                      openaiModel === m.id
+                        ? "bg-purple-500/25 border-purple-400 text-purple-100 font-semibold"
+                        : "bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 

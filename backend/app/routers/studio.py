@@ -236,6 +236,7 @@ async def _run_image_job(
     prompt: str,
     ref_images: list[tuple[bytes, str]],
     provider: str,
+    model_override: str = "",
     aspect_ratio: str,
     scene_title: str,
     product_name: str,
@@ -247,6 +248,7 @@ async def _run_image_job(
             prompt=prompt,
             ref_images=ref_images,
             provider=provider,
+            model_override=model_override,
             aspect_ratio=aspect_ratio,
             scene_title=scene_title,
             product_name=product_name,
@@ -410,6 +412,10 @@ async def generate_single_image(
             detail="尚未配置 OPENAI_API_KEY / OPENAI_IMAGE_API_KEY，请在 Render 环境变量中配置或切换为 Gemini 生图",
         )
 
+    chosen_model = (
+        body.model_override.strip()
+        or (cfg.gemini_image_model if provider == "gemini" else cfg.openai_image_model)
+    )
     refs, _ = _extract_product_ref_images(session)
     asset = GeneratedAsset(
         video_id=video.id,
@@ -419,7 +425,7 @@ async def generate_single_image(
         shot_no=body.shot_no,
         scene_title=body.scene_title or (f"分镜 {body.shot_no}" if body.shot_no else "主视觉海报"),
         provider=provider,
-        model_name=cfg.gemini_image_model if provider == "gemini" else cfg.openai_image_model,
+        model_name=chosen_model,
         status="processing",
         prompt_used=body.prompt,
         mime_type="image/jpeg",
@@ -434,6 +440,7 @@ async def generate_single_image(
         prompt=body.prompt,
         ref_images=refs,
         provider=provider,
+        model_override=body.model_override.strip(),
         aspect_ratio=body.aspect_ratio or "9:16",
         scene_title=asset.scene_title,
         product_name=session.product_name,
@@ -479,6 +486,10 @@ async def generate_all_images(
         for row in db.scalars(stmt).all():
             existing_slots.add(row.slot_index)
 
+    chosen_model = (
+        body.model_override.strip()
+        or (cfg.gemini_image_model if provider == "gemini" else cfg.openai_image_model)
+    )
     created: list[tuple[GeneratedAsset, dict[str, Any]]] = []
     for bp in blueprints:
         if body.only_missing and bp["slot_index"] in existing_slots:
@@ -491,7 +502,7 @@ async def generate_all_images(
             shot_no=bp["shot_no"],
             scene_title=bp["scene_title"],
             provider=provider,
-            model_name=cfg.gemini_image_model if provider == "gemini" else cfg.openai_image_model,
+            model_name=chosen_model,
             status="processing",
             prompt_used=bp["prompt"],
             mime_type="image/jpeg",
@@ -510,6 +521,7 @@ async def generate_all_images(
                 prompt=bp["prompt"],
                 ref_images=refs,
                 provider=provider,
+                model_override=body.model_override.strip(),
                 aspect_ratio=bp["aspect_ratio"],
                 scene_title=bp["scene_title"],
                 product_name=session.product_name,

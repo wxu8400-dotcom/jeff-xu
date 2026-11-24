@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     openai_image_api_key: str = Field(default="", alias="OPENAI_IMAGE_API_KEY")
     openai_image_base_url: str = Field(default="", alias="OPENAI_IMAGE_BASE_URL")
     openai_image_model: str = Field(
-        default="gpt-image-2", alias="OPENAI_IMAGE_MODEL"
+        default="gpt-image-2.6-sunburst", alias="OPENAI_IMAGE_MODEL"
     )
 
     # V2.0 One-Click Video Generation (Kling AI official AK/SK JWT or relay Bearer key)
