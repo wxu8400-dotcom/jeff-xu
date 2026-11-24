@@ -501,13 +501,13 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
 
             {manualEditing ? (
               <textarea
-                rows={5}
+                rows={10}
                 value={manualTextCn}
                 onChange={(e) => setManualTextCn(e.target.value)}
-                className="w-full p-3 rounded-xl bg-slate-900 border border-amber-500/40 text-xs sm:text-sm text-slate-100 leading-relaxed focus:outline-none"
+                className="w-full p-3.5 rounded-xl bg-slate-900 border border-amber-500/40 text-xs sm:text-sm text-slate-100 leading-relaxed focus:outline-none"
               />
             ) : (
-              <div className="text-xs sm:text-sm text-slate-100 leading-relaxed whitespace-pre-wrap bg-slate-900/70 rounded-xl p-3.5 border border-slate-800/80">
+              <div className="text-xs sm:text-sm text-slate-100 leading-relaxed whitespace-pre-wrap bg-slate-900/70 rounded-xl p-4 border border-slate-800/80 max-h-[460px] overflow-y-auto">
                 {currentPromptCn}
               </div>
             )}

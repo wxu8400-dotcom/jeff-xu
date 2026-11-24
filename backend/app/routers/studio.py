@@ -739,11 +739,16 @@ async def revise_director_plan(
         director_memory_block=memory_block,
     )
 
+    product_refs, _ = _extract_product_ref_images(session)
+
     try:
         rev_res, _usage = await ai.generate_structured(
             prompt=rev_prompt,
             schema_cls=DirectorRevisionResponse,
             tier="deep",
+            # Pass user's actual uploaded product photo so AI sees exact color, curves,
+            # stitching, texture, cushions, and excludes any background clutter!
+            images=product_refs[:1],
             mock_context={
                 "current_analysis": curr_analysis,
                 "user_feedback": feedback,

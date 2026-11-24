@@ -325,7 +325,7 @@ def test_openai_compatible_302_fallback_recovers_from_500(monkeypatch):
         async def create(self, **kwargs):
             m = kwargs["model"]
             tried_models.append(m)
-            if m == "gpt-4.1-mini":
+            if m == "gpt-4.1":
                 raise RuntimeError("Error code: 500")
             msg = pytypes.SimpleNamespace(content='{"status": "recovered"}')
             choice = pytypes.SimpleNamespace(message=msg)
@@ -352,7 +352,7 @@ def test_openai_compatible_302_fallback_recovers_from_500(monkeypatch):
     )
     assert text == '{"status": "recovered"}'
     assert usage.input_tokens == 120
-    assert tried_models == ["gpt-4.1-mini", "gpt-4o-mini"]
+    assert tried_models == ["gpt-4.1", "gemini-2.5-pro"]
 
 
 def test_director_long_term_memory_auto_extraction_reinforcement_and_crud(make_client):

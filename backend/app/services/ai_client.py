@@ -477,13 +477,13 @@ class UnifiedAIClient:
             raw_candidates = (
                 ["gpt-4o-mini", "gpt-4.1-mini", "gemini-2.5-flash", configured_model]
                 if tier == "fast"
-                else ["gpt-4.1-mini", "gpt-4o-mini", "gemini-2.5-flash", "gpt-4.1", configured_model]
+                else ["gpt-4.1", "gemini-2.5-pro", "gpt-4.1-mini", "gpt-4o-mini", "gemini-2.5-flash", configured_model]
             )
         else:
             raw_candidates = (
                 [configured_model, "gpt-4o-mini", "gpt-4.1-mini"]
                 if tier == "fast"
-                else [configured_model, "gpt-4.1-mini", "gpt-4o-mini", "gpt-4o"]
+                else [configured_model, "gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini"]
             )
 
         candidates: list[str] = []
@@ -494,7 +494,7 @@ class UnifiedAIClient:
         client = AsyncOpenAI(
             api_key=resolved_key,
             base_url=resolved_url,
-            timeout=35.0 if tier == "fast" else 70.0,
+            timeout=35.0 if tier == "fast" else 110.0,
             max_retries=0,
         )
 
