@@ -532,12 +532,13 @@ def _b64url(data: bytes) -> str:
 
 
 def build_kling_auth_token(cfg: Settings) -> str:
-    """Support BOTH:
-    1) Direct Bearer token (KLING_API_KEY) for Alipay/WeChat relay gateways;
+    """Support:
+    1) Direct Bearer token (KLING_API_KEY, or auto-reused 302.ai OPENAI_IMAGE_API_KEY);
     2) Official Kling Open Platform HS256 JWT signed with KLING_ACCESS_KEY + KLING_SECRET_KEY.
     """
-    if cfg.kling_api_key.strip():
-        return cfg.kling_api_key.strip()
+    bearer = cfg.resolved_kling_api_key()
+    if bearer:
+        return bearer
     ak = cfg.kling_access_key.strip()
     sk = cfg.kling_secret_key.strip()
     if not ak or not sk:
@@ -554,15 +555,82 @@ def build_kling_auth_token(cfg: Settings) -> str:
     return f"{header}.{payload}.{_b64url(sig)}"
 
 
+def _extract_kling_video_url(payload: Any) -> str | None:
+    """Extract final MP4 URL from all known Kling official & 302.ai response schemas."""
+    if not isinstance(payload, dict):
+        return None
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+
+    # 1) Official Kling: data.task_result.videos[0].url
+    task_res = data.get("task_result")
+    if isinstance(task_res, dict):
+        videos = task_res.get("videos")
+        if isinstance(videos, list):
+            for v in videos:
+                if isinstance(v, dict) and isinstance(v.get("url"), str) and v["url"].startswith("http"):
+                    return v["url"]
+        if isinstance(task_res.get("url"), str) and task_res["url"].startswith("http"):
+            return task_res["url"]
+
+    # 2) 302.ai / Kling works format: data.works[0].resource.resource_url or resource
+    works = data.get("works")
+    if isinstance(works, list):
+        for w in works:
+            if not isinstance(w, dict):
+                continue
+            res = w.get("resource")
+            if isinstance(res, dict):
+                for key in ("resource_url", "resource", "url", "video_url"):
+                    val = res.get(key)
+                    if isinstance(val, str) and val.startswith("http"):
+                        return val
+            for key in ("url", "video_url"):
+                val = w.get(key)
+                if isinstance(val, str) and val.startswith("http"):
+                    return val
+
+    # 3) Direct list or flat URL fields
+    videos = data.get("videos")
+    if isinstance(videos, list):
+        for v in videos:
+            if isinstance(v, dict) and isinstance(v.get("url"), str) and v["url"].startswith("http"):
+                return v["url"]
+    for key in ("video_url", "output_url", "response_url", "url"):
+        val = data.get(key)
+        if isinstance(val, str) and val.startswith("http"):
+            return val
+
+    # 4) Recursive fallback for any .mp4 URL
+    def _scan_mp4(obj: Any) -> str | None:
+        if isinstance(obj, str):
+            if obj.startswith("http") and ".mp4" in obj.lower():
+                return obj
+            return None
+        if isinstance(obj, list):
+            for item in obj:
+                found = _scan_mp4(item)
+                if found:
+                    return found
+        elif isinstance(obj, dict):
+            for v in obj.values():
+                found = _scan_mp4(v)
+                if found:
+                    return found
+        return None
+
+    return _scan_mp4(payload)
+
+
 async def generate_kling_video_clip(
     *,
     image_bytes: bytes,
     prompt: str,
     negative_prompt: str = "",
     duration_sec: int = 5,
+    model_override: str = "",
     settings: Settings | None = None,
 ) -> GeneratedVideoResult:
-    """Generate a 5s/10s vertical I2V video clip via Kling AI (official or relay),
+    """Generate a 5s/10s vertical I2V video clip via Kling AI (302.ai relay or official API),
     or realistic FFmpeg Ken Burns MP4 in Mock mode."""
     cfg = settings or get_settings()
     dur = 10 if int(duration_sec) >= 8 else 5
@@ -579,56 +647,105 @@ async def generate_kling_video_clip(
             mime_type="video/mp4",
             duration_sec=3.0,
             provider="kling",
-            model_name="mock-kling-i2v",
+            model_name=model_override.strip() or "mock-kling-v3",
             external_task_id="mock-task-001",
         )
 
     token = build_kling_auth_token(cfg)
-    base_url = cfg.kling_api_base_url.strip().rstrip("/")
-    model_name = cfg.kling_model_name.strip() or "kling-v2-master"
+    base_url = cfg.resolved_kling_base_url()
+    is_302 = "302.ai" in base_url.lower() or "302ai.com" in base_url.lower()
     mode = cfg.kling_mode.strip() or "std"
     img_b64 = base64.b64encode(image_bytes).decode("ascii")
+    img_data_url = f"data:image/jpeg;base64,{img_b64}"
+
+    model_chain: list[str] = []
+    for m in (
+        model_override.strip(),
+        cfg.kling_model_name.strip(),
+        "kling-v3",
+        "kling-v2-6",
+        "kling-v2-5-turbo",
+        "kling-v2-1",
+        "kling-v2-master",
+        "kling-v1-6",
+    ):
+        if m and m not in model_chain:
+            model_chain.append(m)
+
+    submit_paths = (
+        ["/klingai/v1/videos/image2video", "/kling/v1/videos/image2video", "/v1/videos/image2video"]
+        if is_302
+        else ["/v1/videos/image2video", "/klingai/v1/videos/image2video", "/kling/v1/videos/image2video"]
+    )
 
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
-    body: dict[str, Any] = {
-        "model_name": model_name,
-        "mode": mode,
-        "duration": str(dur),
-        "image": img_b64,
-        "prompt": prompt[:2400],
-        "cfg_scale": 0.5,
-    }
-    if negative_prompt.strip():
-        body["negative_prompt"] = negative_prompt.strip()[:1000]
 
-    submit_paths = ["/v1/videos/image2video", "/kling/v1/videos/image2video"]
     task_id: str | None = None
-    active_prefix = "/v1/videos/image2video"
+    active_prefix = submit_paths[0]
+    chosen_model = model_chain[0]
     last_err_text = ""
 
     async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=15.0)) as client:
         for path in submit_paths:
-            resp = await client.post(f"{base_url}{path}", headers=headers, json=body)
-            if resp.status_code == 200:
-                payload = resp.json()
-                data = payload.get("data") or payload
-                tid = (
-                    data.get("task_id")
-                    or data.get("id")
-                    or payload.get("task_id")
-                )
-                if tid:
-                    task_id = str(tid)
-                    active_prefix = path
+            path_not_found = False
+            for candidate_model in model_chain:
+                for img_val in (img_b64, img_data_url):
+                    body: dict[str, Any] = {
+                        "model_name": candidate_model,
+                        "mode": mode,
+                        "duration": str(dur),
+                        "image": img_val,
+                        "prompt": prompt[:2400],
+                        "cfg_scale": 0.5,
+                    }
+                    if negative_prompt.strip():
+                        body["negative_prompt"] = negative_prompt.strip()[:1000]
+
+                    resp = await client.post(f"{base_url}{path}", headers=headers, json=body)
+                    if resp.status_code == 200:
+                        payload = resp.json()
+                        code = payload.get("code")
+                        data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+                        tid = (
+                            data.get("task_id")
+                            or data.get("id")
+                            or payload.get("task_id")
+                        )
+                        if tid:
+                            task_id = str(tid)
+                            active_prefix = path
+                            chosen_model = candidate_model
+                            break
+                        msg = str(payload.get("message") or resp.text[:260])
+                        last_err_text = f"{candidate_model} ({path}): code={code} {msg}"
+                        low_msg = msg.lower()
+                        if "image" in low_msg and img_val == img_b64:
+                            continue
+                        if any(k in low_msg for k in ("model", "not support", "invalid")):
+                            break
+                        break
+                    else:
+                        txt = resp.text[:280]
+                        last_err_text = f"{candidate_model} ({path}) HTTP {resp.status_code}: {txt}"
+                        low = txt.lower()
+                        if resp.status_code in (404, 405) and "model" not in low:
+                            path_not_found = True
+                            break
+                        if "image" in low and img_val == img_b64:
+                            continue
+                        if any(k in low for k in ("model", "not exist", "unsupported", "invalid_model")):
+                            break
+                        # Auth / balance errors should fail immediately without spamming retries
+                        if resp.status_code in (401, 402, 403):
+                            raise RuntimeError(f"可灵 Kling 鉴权或余额异常：{last_err_text}")
+                        break
+                if task_id or path_not_found:
                     break
-                last_err_text = resp.text[:300]
-            else:
-                last_err_text = f"HTTP {resp.status_code}: {resp.text[:300]}"
-                if resp.status_code not in (404, 405):
-                    break
+            if task_id:
+                break
 
         if not task_id:
             raise RuntimeError(f"可灵 Kling 提交任务失败：{last_err_text}")
@@ -645,22 +762,18 @@ async def generate_kling_video_clip(
             if poll_resp.status_code != 200:
                 continue
             p_json = poll_resp.json()
-            p_data = p_json.get("data") or p_json
+            p_data = p_json.get("data") if isinstance(p_json.get("data"), dict) else p_json
             st = str(p_data.get("task_status") or p_data.get("status") or "").lower()
-            if st in ("succeed", "succeeded", "completed", "success"):
-                task_res = p_data.get("task_result") or {}
-                videos = task_res.get("videos") or p_data.get("videos") or []
-                if videos and isinstance(videos, list) and isinstance(videos[0], dict):
-                    video_url = videos[0].get("url")
-                if not video_url:
-                    video_url = p_data.get("video_url") or task_res.get("url")
-                break
-            if st in ("failed", "error", "canceled"):
+            if st in ("succeed", "succeeded", "completed", "success", "99"):
+                video_url = _extract_kling_video_url(p_json)
+                if video_url:
+                    break
+            if st in ("failed", "error", "canceled", "50"):
                 msg = p_data.get("task_status_msg") or p_data.get("message") or "任务失败"
                 raise RuntimeError(f"可灵 Kling 生成失败：{msg}")
 
         if not video_url:
-            raise RuntimeError(f"可灵 Kling 任务 {task_id} 等待超时，请稍后重试")
+            raise RuntimeError(f"可灵 Kling 任务 {task_id} 等待超时或未返回视频地址，请稍后重试")
 
         dl = await client.get(video_url, follow_redirects=True)
         if dl.status_code != 200 or len(dl.content) < 1000:
@@ -671,7 +784,7 @@ async def generate_kling_video_clip(
             mime_type="video/mp4",
             duration_sec=float(dur),
             provider="kling",
-            model_name=model_name,
+            model_name=chosen_model,
             external_task_id=task_id,
             media_url=video_url,
         )

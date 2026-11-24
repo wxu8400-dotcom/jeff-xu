@@ -137,6 +137,7 @@ export const api = {
       prompt: string;
       negative_prompt?: string;
       duration_sec?: number;
+      model_override?: string;
     }
   ) =>
     apiFetch<GeneratedAsset>(
@@ -154,6 +155,7 @@ export const api = {
       only_missing?: boolean;
       duration_sec?: number;
       include_real_shoot_shots?: boolean;
+      model_override?: string;
     }
   ) =>
     apiFetch<GeneratedAsset[]>(

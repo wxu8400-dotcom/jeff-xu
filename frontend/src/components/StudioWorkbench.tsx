@@ -44,6 +44,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
   const [shotModeOverrides, setShotModeOverrides] = useState<Record<number, "ai" | "real_shoot">>({});
   const [imageProvider, setImageProvider] = useState<"gemini" | "openai">("gemini");
   const [openaiModel, setOpenaiModel] = useState<string>("gpt-image-2.6-sunburst");
+  const [klingModel, setKlingModel] = useState<string>("kling-v3");
   const [checkedRealShots, setCheckedRealShots] = useState<Record<number, boolean>>({});
   const [editedPrompts, setEditedPrompts] = useState<Record<number, string>>({});
   const [editingSlot, setEditingSlot] = useState<number | null>(null);
@@ -249,6 +250,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
         prompt: kp.prompt,
         negative_prompt: kp.negative,
         duration_sec: 5,
+        model_override: klingModel,
       });
       onToast(`分镜 ${shot.shot_no} 已提交可灵 AI 生成，完成后自动显示`);
       await loadState(true);
@@ -266,6 +268,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
         only_missing: true,
         duration_sec: 5,
         include_real_shoot_shots: globalMode === "all_ai",
+        model_override: klingModel,
       });
       onToast(`已提交 ${created.length} 个分镜至可灵 AI 生成视频，请稍候...`);
       await loadState(true);
@@ -551,7 +554,32 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
         </div>
 
         {/* One-Click Batch Action Bar */}
-        <div className="flex flex-wrap items-center gap-2.5 pt-2 border-t border-slate-800/80">
+        <div className="space-y-2.5 pt-2 border-t border-slate-800/80">
+          {studio.kling_configured && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] text-slate-400">可灵视频模型：</span>
+              {[
+                { id: "kling-v3", label: "Kling 3.0（最新旗舰）" },
+                { id: "kling-v2-6", label: "Kling 2.6" },
+                { id: "kling-v2-5-turbo", label: "Kling 2.5 Turbo（极速省钱）" },
+                { id: "kling-v2-1", label: "Kling 2.1" },
+              ].map((km) => (
+                <button
+                  key={km.id}
+                  type="button"
+                  onClick={() => setKlingModel(km.id)}
+                  className={`px-2 py-1 rounded-lg text-[11px] border transition ${
+                    klingModel === km.id
+                      ? "bg-sky-500/25 border-sky-400 text-sky-100 font-semibold"
+                      : "bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  {km.label}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-2.5">
           <button
             type="button"
             disabled={batchImgBusy}
@@ -592,6 +620,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
               后台正在生成中，自动刷新...
             </span>
           )}
+          </div>
         </div>
 
         {!studio.kling_configured && (

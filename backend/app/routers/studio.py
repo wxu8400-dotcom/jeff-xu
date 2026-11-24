@@ -289,6 +289,7 @@ async def _run_kling_video_job(
     prompt: str,
     negative_prompt: str,
     duration_sec: int,
+    model_override: str = "",
 ) -> None:
     cfg = get_settings()
     factory = get_session_factory()
@@ -298,6 +299,7 @@ async def _run_kling_video_job(
             prompt=prompt,
             negative_prompt=negative_prompt,
             duration_sec=duration_sec,
+            model_override=model_override,
             settings=cfg,
         )
         db = factory()
@@ -553,6 +555,7 @@ async def generate_single_video_clip(
     if not src_img or src_img.video_id != video.id or not src_img.file_data:
         raise HTTPException(status_code=400, detail="请先为该分镜生成首帧商品图，再调用可灵图生视频")
 
+    chosen_kling_model = body.model_override.strip() or cfg.kling_model_name
     asset = GeneratedAsset(
         video_id=video.id,
         session_id=session.id,
@@ -561,7 +564,7 @@ async def generate_single_video_clip(
         shot_no=body.shot_no,
         scene_title=body.scene_title or f"分镜 {body.shot_no} 可灵 AI 视频",
         provider="kling",
-        model_name=cfg.kling_model_name,
+        model_name=chosen_kling_model,
         status="processing",
         prompt_used=body.prompt,
         source_image_asset_id=src_img.id,
@@ -579,6 +582,7 @@ async def generate_single_video_clip(
             prompt=body.prompt,
             negative_prompt=body.negative_prompt,
             duration_sec=body.duration_sec,
+            model_override=body.model_override.strip(),
         )
     )
     _track_task(task)
@@ -629,6 +633,7 @@ async def generate_all_video_clips(
         if not img_row or not img_row.file_data:
             continue
         title, k_prompt, k_neg = _build_kling_prompt_for_shot(video, session, shot_no)
+        chosen_kling_model = body.model_override.strip() or cfg.kling_model_name
         asset = GeneratedAsset(
             video_id=video.id,
             session_id=session.id,
@@ -637,7 +642,7 @@ async def generate_all_video_clips(
             shot_no=shot_no,
             scene_title=title,
             provider="kling",
-            model_name=cfg.kling_model_name,
+            model_name=chosen_kling_model,
             status="processing",
             prompt_used=k_prompt,
             source_image_asset_id=img_row.id,
@@ -665,6 +670,7 @@ async def generate_all_video_clips(
                 prompt=pr,
                 negative_prompt=neg,
                 duration_sec=body.duration_sec,
+                model_override=body.model_override.strip(),
             )
 
     task = asyncio.create_task(

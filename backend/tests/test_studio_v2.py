@@ -6,7 +6,11 @@ import time
 from PIL import Image
 
 from app.config import Settings
-from app.services.media_generator import _build_gemini_image_client, build_kling_auth_token
+from app.services.media_generator import (
+    _build_gemini_image_client,
+    _extract_kling_video_url,
+    build_kling_auth_token,
+)
 from app.services.video_processor import is_ffmpeg_available
 from app.services.video_stitcher import image_to_motion_clip
 
@@ -56,6 +60,32 @@ def test_gemini_image_client_uses_v1beta_api_version():
     cfg = Settings(GEMINI_API_KEY="dummy-key-123")
     client = _build_gemini_image_client(cfg)
     assert client._api_client._http_options.api_version == "v1beta"
+
+
+def test_kling_auto_reuses_302ai_key_and_parses_all_response_shapes():
+    cfg = Settings(
+        OPENAI_IMAGE_API_KEY="sk-302-auto-key",
+        OPENAI_IMAGE_BASE_URL="https://api.302.ai/v1",
+    )
+    assert cfg.kling_configured() is True
+    assert cfg.resolved_kling_api_key() == "sk-302-auto-key"
+    assert cfg.resolved_kling_base_url() == "https://api.302.ai"
+    assert build_kling_auth_token(cfg) == "sk-302-auto-key"
+
+    # Official Kling format
+    assert (
+        _extract_kling_video_url(
+            {"data": {"task_result": {"videos": [{"url": "https://cdn.kling.ai/a.mp4"}]}}}
+        )
+        == "https://cdn.kling.ai/a.mp4"
+    )
+    # 302.ai works.resource.resource_url format
+    assert (
+        _extract_kling_video_url(
+            {"data": {"works": [{"resource": {"resource_url": "https://cdn.302.ai/b.mp4"}}]}}
+        )
+        == "https://cdn.302.ai/b.mp4"
+    )
 
 
 def test_v2_studio_full_all_ai_and_hybrid_stitch_pipeline(make_client):

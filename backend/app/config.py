@@ -62,7 +62,7 @@ class Settings(BaseSettings):
         default="gpt-image-2.6-sunburst", alias="OPENAI_IMAGE_MODEL"
     )
 
-    # V2.0 One-Click Video Generation (Kling AI official AK/SK JWT or relay Bearer key)
+    # V2.0 One-Click Video Generation (Kling AI official AK/SK JWT, relay key, or auto-reuse 302.ai key)
     kling_api_base_url: str = Field(
         default="https://api-beijing.klingai.com", alias="KLING_API_BASE_URL"
     )
@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     kling_secret_key: str = Field(default="", alias="KLING_SECRET_KEY")
     kling_api_key: str = Field(default="", alias="KLING_API_KEY")
     kling_model_name: str = Field(
-        default="kling-v2-master", alias="KLING_MODEL_NAME"
+        default="kling-v3", alias="KLING_MODEL_NAME"
     )
     kling_mode: str = Field(default="std", alias="KLING_MODE")
 
@@ -85,10 +85,35 @@ class Settings(BaseSettings):
             (self.openai_image_api_key or self.openai_api_key).strip()
         )
 
+    def _is_302_image_relay(self) -> bool:
+        img_key = self.resolved_openai_image_key()
+        img_url = self.resolved_openai_image_base_url().lower()
+        return bool(img_key) and ("302.ai" in img_url or "302ai.com" in img_url)
+
+    def resolved_kling_api_key(self) -> str:
+        if self.kling_api_key.strip():
+            return self.kling_api_key.strip()
+        if self._is_302_image_relay():
+            return self.resolved_openai_image_key()
+        return ""
+
+    def resolved_kling_base_url(self) -> str:
+        if self.kling_api_key.strip() or (
+            self.kling_access_key.strip() and self.kling_secret_key.strip()
+        ):
+            raw = self.kling_api_base_url.strip().rstrip("/")
+        elif self._is_302_image_relay():
+            raw = self.resolved_openai_image_base_url()
+        else:
+            raw = self.kling_api_base_url.strip().rstrip("/")
+        if raw.endswith("/v1"):
+            raw = raw[:-3].rstrip("/")
+        return raw
+
     def kling_configured(self) -> bool:
         if self.enable_mock_mode:
             return True
-        if self.kling_api_key.strip():
+        if self.resolved_kling_api_key():
             return True
         return bool(self.kling_access_key.strip() and self.kling_secret_key.strip())
 

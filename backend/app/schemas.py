@@ -216,7 +216,7 @@ class ConfigCheckOut(BaseModel):
     openai_image_configured: bool = False
     openai_image_model: str = "gpt-image-2.6-sunburst"
     kling_configured: bool = False
-    kling_model_name: str = "kling-v2-master"
+    kling_model_name: str = "kling-v3"
 
 
 class GeneratedAssetOut(BaseModel):
@@ -285,12 +285,14 @@ class GenerateVideoClipRequest(BaseModel):
     prompt: str
     negative_prompt: str = ""
     duration_sec: int = 5
+    model_override: str = ""
 
 
 class GenerateAllVideosRequest(BaseModel):
     only_missing: bool = True
     duration_sec: int = 5
     include_real_shoot_shots: bool = True
+    model_override: str = ""
 
 
 class StitchFinalVideoRequest(BaseModel):
