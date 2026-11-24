@@ -97,8 +97,68 @@ class UnifiedAIClient:
     """Supports Gemini native video/image (official or custom relay URL),
     OpenAI-compatible fallback, and deterministic Mock mode for testing."""
 
+    _discovered_gemini_models: list[str] | None = None
+
     def __init__(self, settings: Settings | None = None):
         self.settings = settings or get_settings()
+
+    @classmethod
+    def _parse_recommended_model_from_error(cls, err_msg: str) -> str | None:
+        m = re.search(
+            r"use\s+models/([a-zA-Z0-9._-]+)",
+            err_msg or "",
+            flags=re.IGNORECASE,
+        )
+        return m.group(1) if m else None
+
+    @classmethod
+    def _discover_gemini_flash_models_sync(cls, client: Any) -> list[str]:
+        if cls._discovered_gemini_models is not None:
+            return list(cls._discovered_gemini_models)
+        found: list[str] = []
+        try:
+            for model in client.models.list():
+                name = str(getattr(model, "name", "") or "")
+                if name.startswith("models/"):
+                    name = name[len("models/") :]
+                lower = name.lower()
+                if not lower.startswith("gemini-") or "flash" not in lower:
+                    continue
+                if any(
+                    bad in lower
+                    for bad in (
+                        "image",
+                        "tts",
+                        "audio",
+                        "live",
+                        "embed",
+                        "robotics",
+                        "computer",
+                        "exp-image",
+                    )
+                ):
+                    continue
+                actions = [
+                    str(a).lower()
+                    for a in (getattr(model, "supported_actions", None) or [])
+                ]
+                if actions and not any("generatecontent" in a for a in actions):
+                    continue
+                found.append(name)
+        except Exception as exc:
+            logger.warning("Gemini models.list() discovery failed: %s", exc)
+            return []
+
+        def _sort_key(model_id: str) -> tuple[float, int, str]:
+            ver_m = re.search(r"gemini-(\d+(?:\.\d+)?)", model_id.lower())
+            ver = float(ver_m.group(1)) if ver_m else 0.0
+            is_stable = 0 if ("preview" in model_id or "exp" in model_id) else 1
+            return (ver, is_stable, model_id)
+
+        found.sort(key=_sort_key, reverse=True)
+        cls._discovered_gemini_models = found
+        logger.info("Discovered live Gemini flash models: %s", found)
+        return list(found)
 
     def is_configured(self) -> bool:
         if self.settings.enable_mock_mode:
@@ -226,24 +286,45 @@ class UnifiedAIClient:
             )
 
         fallback_chain = (
-            [model_name, "gemini-3.5-flash-lite", "gemini-3.5-flash", "gemini-3-flash-preview", "gemini-2.5-flash"]
+            [
+                model_name,
+                "gemini-3.8-flash-lite",
+                "gemini-3.8-flash",
+                "gemini-3.5-flash-lite",
+                "gemini-3.5-flash",
+                "gemini-3-flash-preview",
+            ]
             if tier == "fast"
-            else [model_name, "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3-flash-preview", "gemini-2.5-flash"]
+            else [
+                model_name,
+                "gemini-3.8-flash",
+                "gemini-3.5-flash",
+                "gemini-3.8-flash-lite",
+                "gemini-3.5-flash-lite",
+                "gemini-3-flash-preview",
+            ]
         )
-        seen_models: list[str] = []
+        queue: list[str] = []
         for m in fallback_chain:
-            if m and m not in seen_models:
-                seen_models.append(m)
+            if m and m not in queue:
+                queue.append(m)
 
         resp = None
         last_err: Exception | None = None
-        for idx, candidate_model in enumerate(seen_models):
+        last_non_404_err: Exception | None = None
+        discovered_added = False
+        idx = 0
+
+        while idx < len(queue):
+            candidate_model = queue[idx]
+            idx += 1
             for retry in range(2):
                 try:
                     resp = await asyncio.to_thread(_sync_call, candidate_model)
                     break
                 except Exception as exc:
-                    err_str = str(exc).upper()
+                    err_raw = str(exc)
+                    err_str = err_raw.upper()
                     is_404 = "404" in err_str or "NOT_FOUND" in err_str
                     is_transient = (
                         "503" in err_str
@@ -253,12 +334,28 @@ class UnifiedAIClient:
                         or "OVERLOADED" in err_str
                     )
                     last_err = exc
+                    if not is_404:
+                        last_non_404_err = exc
+
                     if is_404:
                         logger.warning(
                             "Gemini model %s unavailable (404), trying next fallback...",
                             candidate_model,
                         )
+                        rec = self._parse_recommended_model_from_error(err_raw)
+                        if rec and rec not in queue:
+                            queue.insert(idx, rec)
+                            logger.info("Queued Google-recommended Gemini model: %s", rec)
+                        if not discovered_added:
+                            discovered_added = True
+                            live_models = await asyncio.to_thread(
+                                self._discover_gemini_flash_models_sync, client
+                            )
+                            for lm in live_models:
+                                if lm not in queue:
+                                    queue.append(lm)
                         break
+
                     if is_transient:
                         if retry == 0:
                             logger.warning(
@@ -267,18 +364,53 @@ class UnifiedAIClient:
                             )
                             await asyncio.sleep(3.0)
                             continue
-                        if idx < len(seen_models) - 1:
-                            logger.warning(
-                                "Gemini model %s still busy (503/429), switching to next fallback model...",
-                                candidate_model,
+                        if not discovered_added and idx >= len(queue):
+                            discovered_added = True
+                            live_models = await asyncio.to_thread(
+                                self._discover_gemini_flash_models_sync, client
                             )
-                            break
+                            for lm in live_models:
+                                if lm not in queue:
+                                    queue.append(lm)
+                        logger.warning(
+                            "Gemini model %s still busy (503/429), switching to next fallback...",
+                            candidate_model,
+                        )
+                        break
                     raise
             if resp is not None:
                 break
+
         if resp is None:
-            assert last_err is not None
-            raise last_err
+            # Safety net: if Gemini models are temporarily unavailable/deprecated/rate-limited
+            # and an OpenAI-compatible relay key (e.g. 302.ai) is configured, seamlessly fall back
+            # so a radar scan never aborts mid-way.
+            relay_key = (
+                self.settings.openai_api_key.strip()
+                or self.settings.resolved_openai_image_key()
+            )
+            relay_url = (
+                self.settings.openai_base_url.strip()
+                if self.settings.openai_api_key.strip()
+                else self.settings.resolved_openai_image_base_url()
+            )
+            if relay_key:
+                logger.warning(
+                    "All Gemini models failed (%s); falling back to OpenAI-compatible relay (%s)",
+                    last_non_404_err or last_err,
+                    relay_url,
+                )
+                return await self._call_openai_compatible(
+                    prompt=prompt,
+                    tier=tier,
+                    images=images,
+                    video_bytes=video_bytes,
+                    api_key_override=relay_key,
+                    base_url_override=relay_url,
+                )
+            final_err = last_non_404_err or last_err
+            assert final_err is not None
+            raise final_err
         text = resp.text or ""
         usage_meta = getattr(resp, "usage_metadata", None)
         usage = TokenUsage(
@@ -294,6 +426,8 @@ class UnifiedAIClient:
         tier: str,
         images: list[tuple[bytes, str]],
         video_bytes: bytes | None,
+        api_key_override: str = "",
+        base_url_override: str = "",
     ) -> tuple[str, TokenUsage]:
         from openai import AsyncOpenAI
 
@@ -303,8 +437,8 @@ class UnifiedAIClient:
             else self.settings.openai_deep_model
         )
         client = AsyncOpenAI(
-            api_key=self.settings.openai_api_key.strip(),
-            base_url=self.settings.openai_base_url.strip(),
+            api_key=(api_key_override or self.settings.openai_api_key).strip(),
+            base_url=(base_url_override or self.settings.openai_base_url).strip(),
         )
 
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]

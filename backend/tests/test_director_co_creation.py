@@ -247,3 +247,60 @@ def test_smart_reference_passing_respects_keep_scene_and_character_consistency(m
             assert refs0[0][0] == product_bytes
         finally:
             db.close()
+
+
+def test_gemini_recommended_model_parsing_and_302_safety_net(monkeypatch):
+    from app.config import Settings
+    from app.services.ai_client import TokenUsage, UnifiedAIClient
+
+    err_msg = (
+        "404 NOT_FOUND. {'error': {'code': 404, 'message': "
+        "'This model models/gemini-2.5-flash is no longer available to new users. "
+        "Please update your code to use models/gemini-3.8-flash for the latest features.'}}"
+    )
+    assert UnifiedAIClient._parse_recommended_model_from_error(err_msg) == "gemini-3.8-flash"
+
+    # Verify fallback to 302.ai OpenAI-compatible relay when all Gemini models fail
+    cfg = Settings(
+        GEMINI_API_KEY="dummy-gemini",
+        OPENAI_IMAGE_API_KEY="sk-302-relay",
+        OPENAI_IMAGE_BASE_URL="https://api.302.ai/v1",
+        ENABLE_MOCK_MODE=False,
+    )
+    ai = UnifiedAIClient(cfg)
+
+    class _FailingModels:
+        def generate_content(self, **kwargs):
+            raise RuntimeError("404 NOT_FOUND: model not found")
+
+        def list(self):
+            return []
+
+    class _FakeClient:
+        models = _FailingModels()
+
+    monkeypatch.setattr(ai, "_build_gemini_client", lambda: _FakeClient())
+    UnifiedAIClient._discovered_gemini_models = []
+
+    called_relay = {}
+
+    async def _fake_openai_fallback(**kwargs):
+        called_relay.update(kwargs)
+        return '{"ok": true}', TokenUsage(10, 5)
+
+    monkeypatch.setattr(ai, "_call_openai_compatible", _fake_openai_fallback)
+
+    text, usage = asyncio.run(
+        ai._call_gemini(
+            prompt="hello",
+            tier="fast",
+            images=[],
+            video_bytes=None,
+            video_mime="video/mp4",
+        )
+    )
+    assert text == '{"ok": true}'
+    assert usage.input_tokens == 10
+    assert called_relay["api_key_override"] == "sk-302-relay"
+    assert called_relay["base_url_override"] == "https://api.302.ai/v1"
+
