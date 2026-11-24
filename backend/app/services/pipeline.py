@@ -616,7 +616,7 @@ async def run_radar_pipeline(
             # ensure current_master_prompt_cn/en are initialized cleanly from original_video_prompt.
             if compressed_video:
                 previews = await asyncio.to_thread(
-                    extract_filmstrip_previews, compressed_video, 6
+                    extract_filmstrip_previews, compressed_video, 8
                 )
                 if previews:
                     deep_res.director_plan.keyframe_previews = previews

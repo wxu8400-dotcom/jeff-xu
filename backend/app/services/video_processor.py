@@ -162,23 +162,73 @@ def extract_keyframes_from_path(
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-def extract_keyframes_from_bytes(
-    video_bytes: bytes, max_frames: int = 10, max_width: int = 960
-) -> list[bytes]:
+def extract_keyframes_with_timestamps(
+    video_bytes: bytes, max_frames: int = 16, max_width: int = 960
+) -> list[tuple[float, bytes]]:
+    """Extract dense keyframes paired with exact timestamps (starting at 0.15s) so fast
+    1-second transitions (e.g. object flying back into cabin) are NEVER missed."""
+    if not is_ffmpeg_available():
+        return []
     fd, tmp_name = tempfile.mkstemp(prefix="radar_vb_", suffix=".mp4")
     os.close(fd)
     tmp_path = Path(tmp_name)
+    tmp_dir = Path(tempfile.mkdtemp(prefix="radar_frames_"))
     try:
         tmp_path.write_bytes(video_bytes)
-        return extract_keyframes_from_path(
-            tmp_path, max_frames=max_frames, max_width=max_width
-        )
+        duration = _probe_duration_sec(tmp_path)
+        results: list[tuple[float, bytes]] = []
+        if duration and duration > 0.6:
+            timestamps = _compute_inclusive_timestamps(duration, max_frames)
+            for idx, ts in enumerate(timestamps):
+                out_jpg = tmp_dir / f"frame_{idx:02d}.jpg"
+                cmd = [
+                    "ffmpeg",
+                    "-y",
+                    "-ss",
+                    str(ts),
+                    "-i",
+                    str(tmp_path),
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    f"scale='min({max_width},iw)':-2",
+                    "-q:v",
+                    "3",
+                    str(out_jpg),
+                ]
+                subprocess.run(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=20,
+                    check=False,
+                )
+                if out_jpg.exists() and out_jpg.stat().st_size > 200:
+                    results.append((ts, out_jpg.read_bytes()))
+        else:
+            raw_frames = extract_keyframes_from_path(
+                tmp_path, max_frames=max_frames, max_width=max_width
+            )
+            results = [(round(0.15 + i * 1.0, 2), f) for i, f in enumerate(raw_frames)]
+        return results
     finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         if tmp_path.exists():
             try:
                 tmp_path.unlink()
             except OSError:
                 pass
+
+
+def extract_keyframes_from_bytes(
+    video_bytes: bytes, max_frames: int = 10, max_width: int = 960
+) -> list[bytes]:
+    return [
+        frame
+        for _, frame in extract_keyframes_with_timestamps(
+            video_bytes, max_frames=max_frames, max_width=max_width
+        )
+    ]
 
 
 def extract_filmstrip_previews(video_bytes: bytes, max_frames: int = 6) -> list[str]:

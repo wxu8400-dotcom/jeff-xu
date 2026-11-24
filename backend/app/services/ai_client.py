@@ -28,7 +28,7 @@ from ..schemas import (
     VideoDeepAnalysis,
     VideoStructureAnalysis,
 )
-from .video_processor import extract_keyframes_from_bytes
+from .video_processor import extract_keyframes_from_bytes, extract_keyframes_with_timestamps
 
 logger = logging.getLogger(__name__)
 
@@ -499,21 +499,37 @@ class UnifiedAIClient:
         )
 
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
-        all_images = list(images)
-        if video_bytes:
-            frames = await asyncio.to_thread(extract_keyframes_from_bytes, video_bytes, 10)
-            all_images.extend([(f, "image/jpeg") for f in frames])
-
         img_detail = "high" if tier == "deep" else "low"
-        max_imgs = 12 if tier == "deep" else 6
-        for img_bytes, mime in all_images[:max_imgs]:
-            b64 = base64.b64encode(img_bytes).decode("ascii")
-            content.append(
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{mime};base64,{b64}", "detail": img_detail},
-                }
+
+        if video_bytes and tier == "deep":
+            ts_frames = await asyncio.to_thread(
+                extract_keyframes_with_timestamps, video_bytes, 16, 960
             )
+            for idx_f, (ts, frame_bytes) in enumerate(ts_frames, start=1):
+                b64 = base64.b64encode(frame_bytes).decode("ascii")
+                content.append(
+                    {"type": "text", "text": f"[原视频第 {idx_f}/{len(ts_frames)} 帧 · 时间 {ts:.1f}s]"}
+                )
+                content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "high"},
+                    }
+                )
+        else:
+            all_images = list(images)
+            if video_bytes:
+                frames = await asyncio.to_thread(extract_keyframes_from_bytes, video_bytes, 10)
+                all_images.extend([(f, "image/jpeg") for f in frames])
+            max_imgs = 12 if tier == "deep" else 6
+            for img_bytes, mime in all_images[:max_imgs]:
+                b64 = base64.b64encode(img_bytes).decode("ascii")
+                content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime};base64,{b64}", "detail": img_detail},
+                    }
+                )
 
         last_err: Exception | None = None
         tried_errors: list[str] = []
