@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import Annotated
 from urllib.parse import quote
 
@@ -171,6 +172,19 @@ async def create_radar_scan(
     return {"session_id": session.id, "history_title": session.history_title}
 
 
+def _extract_urls_from_text(raw: str) -> list[str]:
+    """Extract clean HTTP(S) URLs even from mobile share texts (TikTok/Douyin/IG/YT)."""
+    found = re.findall(r"https?://[^\s<>\"'，。；！？）】\]]+", raw or "")
+    out: list[str] = []
+    seen: set[str] = set()
+    for u in found:
+        cleaned = u.rstrip(".,;:!?)'\"")
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            out.append(cleaned)
+    return out
+
+
 @router.post("/analyze-urls")
 async def create_direct_url_scan(
     db: Annotated[Session, Depends(get_db)],
@@ -180,11 +194,11 @@ async def create_direct_url_scan(
     product_name_override: str = Form(default=""),
     user_instruction: str = Form(default=""),
 ) -> dict[str, str]:
-    url_list = [u.strip() for u in urls.replace(",", "\n").splitlines() if u.strip().startswith("http")]
+    url_list = _extract_urls_from_text(urls)
     if not url_list:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="请粘贴至少 1 条有效的 TikTok / Instagram / YouTube 视频链接",
+            detail="请粘贴至少 1 条有效的 TikTok / Instagram / YouTube 视频链接（支持直接粘贴手机 App 复制的分享文案）",
         )
     raw_files = await _read_uploads(files)
     if not raw_files and not product_text.strip() and not product_name_override.strip():

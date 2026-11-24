@@ -168,18 +168,16 @@ class UnifiedAIClient:
             return bool(self.settings.gemini_api_key.strip())
         return bool(self.settings.openai_api_key.strip())
 
-    def _build_gemini_client(self):
+    def _build_gemini_client(self, *, timeout_ms: int = 30_000):
         from google import genai
         from google.genai import types
 
-        http_options = None
+        http_kwargs: dict[str, Any] = {"timeout": timeout_ms}
         if self.settings.gemini_base_url.strip():
-            http_options = types.HttpOptions(
-                base_url=self.settings.gemini_base_url.strip().rstrip("/")
-            )
+            http_kwargs["base_url"] = self.settings.gemini_base_url.strip().rstrip("/")
         return genai.Client(
             api_key=self.settings.gemini_api_key.strip(),
-            http_options=http_options,
+            http_options=types.HttpOptions(**http_kwargs),
         )
 
     async def generate_structured(
@@ -258,7 +256,8 @@ class UnifiedAIClient:
             if tier == "fast"
             else self.settings.gemini_deep_model
         )
-        client = self._build_gemini_client()
+        per_call_timeout = 22.0 if tier == "fast" else 55.0
+        client = self._build_gemini_client(timeout_ms=int(per_call_timeout * 1000))
 
         parts: list[Any] = [types.Part.from_text(text=prompt)]
         for img_bytes, mime in images:
@@ -319,20 +318,32 @@ class UnifiedAIClient:
         last_non_404_err: Exception | None = None
         discovered_added = False
         idx = 0
+        gemini_deadline = asyncio.get_running_loop().time() + (28.0 if tier == "fast" else 75.0)
 
         while idx < len(queue):
+            if asyncio.get_running_loop().time() >= gemini_deadline:
+                logger.warning("Gemini fallback budget exceeded (tier=%s), switching to relay fallback", tier)
+                break
             candidate_model = queue[idx]
             idx += 1
             for retry in range(2):
+                remaining = gemini_deadline - asyncio.get_running_loop().time()
+                if remaining <= 2.0:
+                    break
                 try:
-                    resp = await asyncio.to_thread(_sync_call, candidate_model)
+                    resp = await asyncio.wait_for(
+                        asyncio.to_thread(_sync_call, candidate_model),
+                        timeout=min(per_call_timeout, remaining),
+                    )
                     break
                 except Exception as exc:
-                    err_raw = str(exc)
+                    err_raw = str(exc) or type(exc).__name__
                     err_str = err_raw.upper()
                     is_404 = "404" in err_str or "NOT_FOUND" in err_str
+                    is_timeout = isinstance(exc, (asyncio.TimeoutError, TimeoutError)) or "TIMEOUT" in err_str
                     is_transient = (
-                        "500" in err_str
+                        is_timeout
+                        or "500" in err_str
                         or "INTERNAL" in err_str
                         or "502" in err_str
                         or "503" in err_str
@@ -359,28 +370,36 @@ class UnifiedAIClient:
                             logger.info("Queued Google-recommended Gemini model: %s", rec)
                         if not discovered_added:
                             discovered_added = True
-                            live_models = await asyncio.to_thread(
-                                self._discover_gemini_flash_models_sync, client
-                            )
+                            try:
+                                live_models = await asyncio.wait_for(
+                                    asyncio.to_thread(self._discover_gemini_flash_models_sync, client),
+                                    timeout=8.0,
+                                )
+                            except Exception:
+                                live_models = []
                             for lm in live_models:
                                 if lm not in queue and lm not in self._dead_gemini_models:
                                     queue.append(lm)
                         break
 
                     if is_transient:
-                        if retry == 0:
+                        if retry == 0 and not is_timeout and (gemini_deadline - asyncio.get_running_loop().time()) > 8.0:
                             logger.warning(
-                                "Gemini model %s returned transient error (%s), retrying in 2s...",
+                                "Gemini model %s returned transient error (%s), retrying in 1.5s...",
                                 candidate_model,
                                 err_raw[:120],
                             )
-                            await asyncio.sleep(2.0)
+                            await asyncio.sleep(1.5)
                             continue
-                        if not discovered_added and idx >= len(queue):
+                        if not discovered_added and idx >= len(queue) and (gemini_deadline - asyncio.get_running_loop().time()) > 10.0:
                             discovered_added = True
-                            live_models = await asyncio.to_thread(
-                                self._discover_gemini_flash_models_sync, client
-                            )
+                            try:
+                                live_models = await asyncio.wait_for(
+                                    asyncio.to_thread(self._discover_gemini_flash_models_sync, client),
+                                    timeout=8.0,
+                                )
+                            except Exception:
+                                live_models = []
                             for lm in live_models:
                                 if lm not in queue and lm not in self._dead_gemini_models:
                                     queue.append(lm)
@@ -474,8 +493,8 @@ class UnifiedAIClient:
         client = AsyncOpenAI(
             api_key=resolved_key,
             base_url=resolved_url,
-            timeout=90.0,
-            max_retries=1,
+            timeout=35.0 if tier == "fast" else 70.0,
+            max_retries=0,
         )
 
         content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]

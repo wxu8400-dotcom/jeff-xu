@@ -133,3 +133,51 @@ class YouTubeOfficialCollector(BaseCollector):
                 except Exception as exc:
                     logger.warning("YouTube videos.list failed: %s", exc)
             return results
+
+    async def fetch_by_id(self, video_id: str, video_url: str = "") -> CandidateVideo | None:
+        """Fetch exact metadata & cover thumbnail for a single YouTube video/Short by ID."""
+        if not self.api_key or not video_id:
+            return None
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=6.0)) as client:
+                resp = await client.get(
+                    "https://www.googleapis.com/youtube/v3/videos",
+                    params={
+                        "part": "snippet,statistics,contentDetails",
+                        "id": video_id,
+                        "key": self.api_key,
+                    },
+                )
+                if resp.status_code != 200:
+                    return None
+                items = resp.json().get("items") or []
+                if not items:
+                    return None
+                item = items[0]
+                snippet = item.get("snippet") or {}
+                stats = item.get("statistics") or {}
+                details = item.get("contentDetails") or {}
+                dur = _parse_iso8601_duration(details.get("duration", ""))
+                thumbs = snippet.get("thumbnails") or {}
+                cover = (
+                    (thumbs.get("high") or {}).get("url")
+                    or (thumbs.get("medium") or {}).get("url")
+                    or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+                )
+                return CandidateVideo(
+                    platform="youtube",
+                    platform_video_id=video_id,
+                    video_url=video_url or f"https://www.youtube.com/shorts/{video_id}",
+                    cover_url=cover,
+                    author_name=snippet.get("channelTitle", ""),
+                    title=snippet.get("title", ""),
+                    caption=snippet.get("description", ""),
+                    published_at=snippet.get("publishedAt"),
+                    duration_sec=dur,
+                    views=int(stats.get("viewCount") or 0),
+                    likes=int(stats.get("likeCount") or 0),
+                    comments=int(stats.get("commentCount") or 0),
+                )
+        except Exception as exc:
+            logger.warning("YouTube fetch_by_id failed for %s: %s", video_id, exc)
+            return None

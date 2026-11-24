@@ -198,6 +198,8 @@ async def download_and_compress_video(
     max_download_mb: int = 80,
 ) -> bytes | None:
     """Download video via direct URL first, then yt-dlp fallback; compress and clean up /tmp."""
+    import asyncio
+
     fd, tmp_name = tempfile.mkstemp(prefix="radar_dl_", suffix=".mp4")
     os.close(fd)
     raw_path = Path(tmp_name)
@@ -205,15 +207,25 @@ async def download_and_compress_video(
     try:
         if download_url and download_url.startswith("http"):
             downloaded = await _download_direct(
-                download_url, raw_path, max_bytes=max_download_mb * 1024 * 1024
+                download_url,
+                raw_path,
+                max_bytes=max_download_mb * 1024 * 1024,
+                referer=video_url,
             )
         if not downloaded and video_url.startswith("http"):
-            downloaded = await _download_via_ytdlp(video_url, raw_path)
+            try:
+                downloaded = await asyncio.wait_for(
+                    _download_via_ytdlp(video_url, raw_path),
+                    timeout=28.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("yt-dlp download timed out for %s", video_url)
+                downloaded = False
 
         if not downloaded or not raw_path.exists() or raw_path.stat().st_size < 2048:
             return None
 
-        return compress_video_for_analysis(raw_path)
+        return await asyncio.to_thread(compress_video_for_analysis, raw_path)
     except Exception as exc:
         logger.warning("Video download/compression failed for %s: %s", video_url, exc)
         return None
@@ -225,16 +237,29 @@ async def download_and_compress_video(
                 pass
 
 
-async def _download_direct(url: str, dest: Path, max_bytes: int) -> bool:
+async def _download_direct(
+    url: str,
+    dest: Path,
+    max_bytes: int,
+    referer: str = "",
+) -> bool:
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"
-        )
+        ),
+        "Accept": "*/*",
     }
+    if referer and referer.startswith("http"):
+        if "tiktok" in referer.lower() or "tiktok" in url.lower():
+            headers["Referer"] = "https://www.tiktok.com/"
+        elif "instagram" in referer.lower() or "cdninstagram" in url.lower():
+            headers["Referer"] = "https://www.instagram.com/"
+        elif "douyin" in referer.lower() or "douyin" in url.lower():
+            headers["Referer"] = "https://www.douyin.com/"
     try:
         async with httpx.AsyncClient(
-            timeout=httpx.Timeout(30.0, connect=10.0),
+            timeout=httpx.Timeout(28.0, connect=10.0),
             follow_redirects=True,
             headers=headers,
         ) as client:
@@ -242,7 +267,7 @@ async def _download_direct(url: str, dest: Path, max_bytes: int) -> bool:
                 if resp.status_code >= 400:
                     return False
                 ctype = resp.headers.get("content-type", "").lower()
-                if "text/html" in ctype:
+                if "text/html" in ctype or "application/json" in ctype:
                     return False
                 total = 0
                 with dest.open("wb") as f:

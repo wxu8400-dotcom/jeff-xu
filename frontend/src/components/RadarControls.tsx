@@ -70,18 +70,6 @@ export const RadarControls: React.FC<Props> = ({
       <div className="flex gap-2">
         <button
           type="button"
-          onClick={() => onChange({ ...params, mode: "radar" })}
-          className={`flex-1 sm:flex-none px-4 py-2 rounded-xl text-xs sm:text-sm font-medium flex items-center justify-center gap-1.5 border transition ${
-            params.mode === "radar"
-              ? "bg-sky-500/20 border-sky-400 text-sky-200"
-              : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
-          }`}
-        >
-          <Radar className="w-4 h-4" />
-          三平台爆款实时雷达
-        </button>
-        <button
-          type="button"
           onClick={() => onChange({ ...params, mode: "direct_urls" })}
           className={`flex-1 sm:flex-none px-4 py-2 rounded-xl text-xs sm:text-sm font-medium flex items-center justify-center gap-1.5 border transition ${
             params.mode === "direct_urls"
@@ -90,7 +78,19 @@ export const RadarControls: React.FC<Props> = ({
           }`}
         >
           <Link2 className="w-4 h-4" />
-          粘贴链接直接拆解
+          粘贴链接直接拆解（TK / INS / YT 推荐）
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange({ ...params, mode: "radar" })}
+          className={`flex-1 sm:flex-none px-4 py-2 rounded-xl text-xs sm:text-sm font-medium flex items-center justify-center gap-1.5 border transition ${
+            params.mode === "radar"
+              ? "bg-sky-500/20 border-sky-400 text-sky-200"
+              : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
+          }`}
+        >
+          <Radar className="w-4 h-4" />
+          三平台爆款实时搜索
         </button>
       </div>
 
@@ -305,15 +305,20 @@ export const RadarControls: React.FC<Props> = ({
           </label>
         </>
       ) : (
-        <div>
-          <label className="block text-xs font-medium text-slate-300 mb-1.5">
-            粘贴 1~5 条 TikTok / Instagram Reels / YouTube Shorts 链接（每行一条）
-          </label>
+        <div className="space-y-1.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label className="block text-xs font-medium text-slate-200">
+              粘贴 1~5 条 TikTok / Instagram / YouTube 爆款视频链接（每行一条，支持直接粘贴手机 App 复制的带文字分享口令）
+            </label>
+            <span className="text-[11px] text-emerald-300">
+              ✓ 自动走高速通道拉取无水印原片画面做 1:1 逐镜拆解
+            </span>
+          </div>
           <textarea
             rows={3}
             value={params.directUrls}
             onChange={(e) => onChange({ ...params, directUrls: e.target.value })}
-            placeholder={"https://www.tiktok.com/@.../video/...\nhttps://www.instagram.com/reel/...\nhttps://www.youtube.com/shorts/..."}
+            placeholder={"支持长链接、短链及 App 分享文案：\nhttps://vt.tiktok.com/ZSxxxxxx/  或  https://www.tiktok.com/@.../video/...\nhttps://www.instagram.com/reel/...\nhttps://www.youtube.com/shorts/..."}
             className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-xs sm:text-sm text-slate-100 placeholder-slate-500 font-mono"
           />
         </div>

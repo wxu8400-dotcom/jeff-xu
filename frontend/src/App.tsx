@@ -26,7 +26,7 @@ import type {
 } from "./types/radar";
 
 const DEFAULT_PARAMS: RadarFormParams = {
-  mode: "radar",
+  mode: "direct_urls",
   searchStrategy: "cross_category",
   creativeStyles: [],
   platforms: ["tiktok", "instagram", "youtube"],
@@ -115,6 +115,27 @@ export default function App() {
     }, 250);
     return () => clearTimeout(t);
   }, [historyQuery, auth?.authenticated, refreshHistory]);
+
+  // Reliable 3-second polling safety net alongside SSE so Render proxy / mobile network
+  // SSE drops NEVER freeze the progress bar at 10%.
+  const activeSessionId = activeSession?.id || null;
+  const activeSessionStatus = activeSession?.status || null;
+  useEffect(() => {
+    if (!activeSessionId || !activeSessionStatus) return;
+    if (activeSessionStatus === "completed" || activeSessionStatus === "failed") return;
+    const timer = setInterval(() => {
+      api
+        .getScanDetail(activeSessionId)
+        .then((detail) => {
+          setActiveSession((prev) => (prev && prev.id === detail.id ? detail : prev));
+          if (detail.status === "completed" || detail.status === "failed") {
+            refreshHistory(historyQuery);
+          }
+        })
+        .catch(() => {});
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [activeSessionId, activeSessionStatus, historyQuery, refreshHistory]);
 
   const subscribeToSession = useCallback(
     (sessionId: string) => {

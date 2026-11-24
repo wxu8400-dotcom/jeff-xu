@@ -95,14 +95,16 @@ def _detect_platform_from_url(url: str) -> tuple[str, str]:
     parsed = urlparse(url.strip())
     host = (parsed.netloc or "").lower()
     path = parsed.path or ""
-    if "tiktok" in host:
-        m = re.search(r"/video/(\d+)", path)
+    if "tiktok" in host or "douyin" in host:
+        m = re.search(r"/(?:video|photo|v)/(\d+)", path)
+        if not m:
+            m = re.search(r"/(\d{15,22})", path)
         return "tiktok", (m.group(1) if m else re.sub(r"\W+", "", path)[-16:] or "tk_link")
-    if "instagram" in host:
-        m = re.search(r"/(?:reel|p|tv)/([^/?#]+)", path)
+    if "instagram" in host or "instagr.am" in host:
+        m = re.search(r"/(?:reel|reels|p|tv)/([^/?#]+)", path)
         return "instagram", (m.group(1) if m else re.sub(r"\W+", "", path)[-16:] or "ig_link")
     if "youtube" in host or "youtu.be" in host:
-        m = re.search(r"/shorts/([^/?#]+)", path)
+        m = re.search(r"/(?:shorts|live|embed)/([^/?#]+)", path)
         if m:
             return "youtube", m.group(1)
         m2 = re.search(r"[?&]v=([^&]+)", url)
@@ -112,6 +114,136 @@ def _detect_platform_from_url(url: str) -> tuple[str, str]:
             return "youtube", path.strip("/").split("/")[0]
         return "youtube", "yt_link"
     return "tiktok", re.sub(r"\W+", "", url)[-16:] or "custom_link"
+
+
+async def _expand_short_url(url: str) -> str:
+    """Resolve mobile short redirect links (vt.tiktok.com / vm.tiktok.com / tiktok.com/t/ / instagr.am / youtu.be)."""
+    lower = url.lower()
+    is_short = any(
+        h in lower
+        for h in (
+            "vt.tiktok.com",
+            "vm.tiktok.com",
+            "tiktok.com/t/",
+            "v.douyin.com",
+            "instagr.am",
+            "youtu.be/",
+        )
+    )
+    if not is_short:
+        return url
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(8.0, connect=5.0),
+            follow_redirects=True,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+                    "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+                )
+            },
+        ) as client:
+            resp = await client.get(url)
+            final = str(resp.url)
+            if final.startswith("http"):
+                return final
+    except Exception as exc:
+        logger.debug("Short URL expansion skipped for %s: %s", url, exc)
+    return url
+
+
+async def _resolve_direct_url_candidate(
+    raw_url: str,
+    cfg: Settings,
+    warnings: list[str],
+) -> CandidateVideo:
+    """Resolve a user-pasted TikTok / Instagram / YouTube link into real metadata + direct MP4 URL
+    using TikHub single-video APIs and YouTube Official API so native video analysis never runs blind."""
+    clean_u = raw_url.strip()
+    plat, vid = _detect_platform_from_url(clean_u)
+
+    if cfg.enable_mock_mode:
+        return CandidateVideo(
+            platform=plat,
+            platform_video_id=vid,
+            video_url=clean_u,
+            title=f"{plat.upper()} 指定视频 ({vid})",
+        )
+
+    expanded = await _expand_short_url(clean_u)
+    exp_plat, exp_vid = _detect_platform_from_url(expanded)
+    if exp_plat:
+        plat = exp_plat
+    if exp_vid and exp_vid not in ("tk_link", "ig_link", "yt_link", "custom_link"):
+        vid = exp_vid
+
+    tikhub = TikHubCollector(cfg)
+    yt_official = YouTubeOfficialCollector(cfg)
+
+    resolved: CandidateVideo | None = None
+    if tikhub.is_configured():
+        try:
+            # Pass original URL first (TikHub share_url/hybrid handles short URLs natively),
+            # and fallback to expanded canonical URL if different.
+            resolved = await tikhub.fetch_by_url(
+                clean_u, platform_hint=plat, video_id_hint=vid
+            )
+            if (resolved is None or not resolved.download_url) and expanded != clean_u:
+                alt = await tikhub.fetch_by_url(
+                    expanded, platform_hint=plat, video_id_hint=vid
+                )
+                if alt and (resolved is None or alt.download_url):
+                    resolved = alt
+        except Exception as exc:
+            logger.warning("TikHub direct URL resolve failed for %s: %s", clean_u, exc)
+
+    if plat == "youtube" and vid and vid != "yt_link":
+        if (resolved is None or not resolved.title or not resolved.cover_url) and yt_official.is_configured():
+            try:
+                yt_meta = await yt_official.fetch_by_id(vid, video_url=expanded or clean_u)
+                if yt_meta:
+                    if resolved is None:
+                        resolved = yt_meta
+                    else:
+                        if not resolved.title or resolved.title.startswith("YOUTUBE"):
+                            resolved.title = yt_meta.title
+                        if not resolved.caption:
+                            resolved.caption = yt_meta.caption
+                        if not resolved.cover_url:
+                            resolved.cover_url = yt_meta.cover_url
+                        if not resolved.author_name:
+                            resolved.author_name = yt_meta.author_name
+                        if resolved.views == 0:
+                            resolved.views = yt_meta.views
+                        if resolved.likes == 0:
+                            resolved.likes = yt_meta.likes
+                        if resolved.duration_sec is None:
+                            resolved.duration_sec = yt_meta.duration_sec
+            except Exception as exc:
+                logger.warning("YouTube official fetch_by_id failed for %s: %s", vid, exc)
+
+    if resolved is not None:
+        if not resolved.video_url:
+            resolved.video_url = expanded or clean_u
+        if plat == "youtube" and not resolved.cover_url and resolved.platform_video_id:
+            resolved.cover_url = f"https://i.ytimg.com/vi/{resolved.platform_video_id}/hqdefault.jpg"
+        return resolved
+
+    fallback_cover = (
+        f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
+        if plat == "youtube" and vid and vid != "yt_link"
+        else None
+    )
+    warnings.append(
+        f"链接 {clean_u[:56]} 未从高速通道解析到无水印直链，将尝试备用下载器抓取画面"
+    )
+    return CandidateVideo(
+        platform=plat,
+        platform_video_id=vid,
+        video_url=expanded or clean_u,
+        cover_url=fallback_cover,
+        title=f"{plat.upper()} 指定视频 ({vid})",
+    )
 
 
 def _update_session(
@@ -262,27 +394,36 @@ async def run_radar_pipeline(
 
         # === Branch: Direct URLs Mode vs 3-Platform Radar Mode ===
         if direct_urls:
+            clean_urls = [u.strip() for u in direct_urls[:5] if u.strip()]
+            _update_session(
+                session_id,
+                status="collecting",
+                progress_percent=34,
+                progress_message=f"正在通过高速通道解析你上传的 {len(clean_urls)} 条 TK / INS / YT 视频链接与无水印片源...",
+                funnel_stats=stats,
+            )
             selected_for_deep: list[tuple[CandidateVideo, int, str]] = []
-            for raw_url in direct_urls[:5]:
-                clean_u = raw_url.strip()
-                if not clean_u:
-                    continue
-                plat, vid = _detect_platform_from_url(clean_u)
-                cand = CandidateVideo(
-                    platform=plat,
-                    platform_video_id=vid,
-                    video_url=clean_u,
-                    title=f"{plat.upper()} 指定视频 ({vid})",
+            for idx_u, raw_url in enumerate(clean_urls, start=1):
+                cand = await _resolve_direct_url_candidate(raw_url, cfg, stats["warnings"])
+                selected_for_deep.append((cand, 90, "用户指定直拆视频"))
+                _update_session(
+                    session_id,
+                    status="collecting",
+                    progress_percent=34 + int((idx_u / max(len(clean_urls), 1)) * 16),
+                    progress_message=(
+                        f"已解析链接 {idx_u}/{len(clean_urls)}（[{cand.platform.upper()}] "
+                        f"{'已获无水印片源' if cand.download_url else '准备备用抓取'}）：{cand.title[:28]}"
+                    ),
+                    funnel_stats=stats,
                 )
-                selected_for_deep.append((cand, 85, "用户指定直拆视频"))
             stats["collected"] = len(selected_for_deep)
             stats["after_hard_filter"] = len(selected_for_deep)
             stats["after_screening"] = len(selected_for_deep)
             _update_session(
                 session_id,
                 status="analyzing",
-                progress_percent=50,
-                progress_message=f"指定链接直拆模式：准备深度拆解 {len(selected_for_deep)} 条视频...",
+                progress_percent=52,
+                progress_message=f"链接解析完毕，开始下载画面并深度 1:1 拆解 {len(selected_for_deep)} 条视频...",
                 funnel_stats=stats,
             )
         else:

@@ -279,7 +279,7 @@ def test_gemini_recommended_model_parsing_and_302_safety_net(monkeypatch):
     class _FakeClient:
         models = _FailingModels()
 
-    monkeypatch.setattr(ai, "_build_gemini_client", lambda: _FakeClient())
+    monkeypatch.setattr(ai, "_build_gemini_client", lambda **kwargs: _FakeClient())
     UnifiedAIClient._discovered_gemini_models = []
     UnifiedAIClient._dead_gemini_models = set()
 

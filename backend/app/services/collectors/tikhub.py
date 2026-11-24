@@ -281,9 +281,29 @@ class TikHubCollector(BaseCollector):
                 for el in obj:
                     _collect_nodes(el)
             elif isinstance(obj, dict):
-                if any(k in obj for k in ("code", "shortcode", "video_versions", "play_count")):
+                if any(
+                    k in obj
+                    for k in (
+                        "code",
+                        "shortcode",
+                        "video_versions",
+                        "video_url",
+                        "play_count",
+                    )
+                ):
                     raw_items.append(obj)
-                for key in ("data", "items", "reels", "medias", "sections", "layout_content", "nodes"):
+                for key in (
+                    "data",
+                    "items",
+                    "reels",
+                    "medias",
+                    "sections",
+                    "layout_content",
+                    "nodes",
+                    "xdt_shortcode_media",
+                    "shortcode_media",
+                    "graphql",
+                ):
                     if key in obj:
                         _collect_nodes(obj[key])
                 if "media" in obj and isinstance(obj["media"], dict):
@@ -307,13 +327,19 @@ class TikHubCollector(BaseCollector):
                 img_candidates,
                 item.get("thumbnail_url"),
                 item.get("display_url"),
+                item.get("thumbnail_src"),
             )
             caption_obj = item.get("caption")
-            caption_text = (
-                caption_obj.get("text", "")
-                if isinstance(caption_obj, dict)
-                else str(caption_obj or "")
-            )
+            if isinstance(caption_obj, dict):
+                caption_text = str(caption_obj.get("text") or "")
+            elif isinstance(caption_obj, str):
+                caption_text = caption_obj
+            else:
+                caption_text = ""
+            if not caption_text:
+                edges = ((item.get("edge_media_to_caption") or {}).get("edges")) or []
+                if isinstance(edges, list) and edges and isinstance(edges[0], dict):
+                    caption_text = str(((edges[0].get("node") or {}).get("text")) or "")
             user = item.get("user") or item.get("owner") or {}
             video_url = (
                 f"https://www.instagram.com/reel/{code}/"
@@ -325,8 +351,13 @@ class TikHubCollector(BaseCollector):
                 or item.get("ig_play_count")
                 or item.get("view_count")
                 or item.get("video_view_count")
+                or item.get("video_play_count")
             )
-            likes = _to_int(item.get("like_count") or item.get("likes"))
+            likes = _to_int(
+                item.get("like_count")
+                or item.get("likes")
+                or (item.get("edge_media_preview_like") or {}).get("count")
+            )
             if views == 0 and likes > 0:
                 views = likes * 15
             candidates.append(
@@ -343,7 +374,10 @@ class TikHubCollector(BaseCollector):
                     duration_sec=_parse_duration_str(item.get("video_duration")),
                     views=views,
                     likes=likes,
-                    comments=_to_int(item.get("comment_count")),
+                    comments=_to_int(
+                        item.get("comment_count")
+                        or (item.get("edge_media_to_comment") or {}).get("count")
+                    ),
                     shares=_to_int(item.get("reshare_count")),
                 )
             )
@@ -429,3 +463,257 @@ class TikHubCollector(BaseCollector):
                 )
             )
         return candidates
+
+    async def fetch_by_url(
+        self,
+        url: str,
+        *,
+        platform_hint: str = "",
+        video_id_hint: str = "",
+    ) -> CandidateVideo | None:
+        """Resolve a single user-pasted TikTok / Instagram / YouTube URL (including mobile
+        short links like vt.tiktok.com / vm.tiktok.com / youtu.be) into full metadata + direct MP4 URL."""
+        if not self.api_key or not url.strip():
+            return None
+
+        clean_url = url.strip()
+        lower_url = clean_url.lower()
+        plat = platform_hint.lower()
+        if not plat:
+            if "tiktok" in lower_url or "douyin" in lower_url:
+                plat = "tiktok"
+            elif "instagram" in lower_url or "instagr.am" in lower_url:
+                plat = "instagram"
+            elif "youtube" in lower_url or "youtu.be" in lower_url:
+                plat = "youtube"
+
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(18.0, connect=8.0),
+            follow_redirects=True,
+        ) as client:
+            if plat == "tiktok":
+                return await self._fetch_single_tiktok(client, clean_url, video_id_hint)
+            if plat == "instagram":
+                return await self._fetch_single_instagram(client, clean_url, video_id_hint)
+            if plat == "youtube":
+                return await self._fetch_single_youtube(client, clean_url, video_id_hint)
+            # Unknown host: still try hybrid endpoint as best effort
+            return await self._fetch_single_tiktok(client, clean_url, video_id_hint)
+
+    def _parse_hybrid_single_payload(
+        self, payload: dict[str, Any], fallback_url: str, platform: str = "tiktok"
+    ) -> CandidateVideo | None:
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            return None
+        vdata = data.get("video_data") or {}
+        if not isinstance(vdata, dict):
+            vdata = {}
+        cdata = data.get("cover_data") or {}
+        if not isinstance(cdata, dict):
+            cdata = {}
+        stats = data.get("statistics") or data.get("stats") or {}
+        if not isinstance(stats, dict):
+            stats = {}
+        author = data.get("author") or {}
+        if not isinstance(author, dict):
+            author = {}
+
+        download_url = _first_str(
+            vdata.get("nwm_video_url_HQ"),
+            vdata.get("nwm_video_url"),
+            vdata.get("wm_video_url_HQ"),
+            vdata.get("wm_video_url"),
+        )
+        cover_url = _first_str(
+            (cdata.get("origin_cover") or {}).get("url_list")
+            if isinstance(cdata.get("origin_cover"), dict)
+            else cdata.get("origin_cover"),
+            (cdata.get("cover") or {}).get("url_list")
+            if isinstance(cdata.get("cover"), dict)
+            else cdata.get("cover"),
+        )
+        vid = _first_str(data.get("aweme_id"), data.get("video_id"), data.get("id"))
+        desc = _first_str(data.get("desc"), data.get("title"))
+        if not download_url and not vid and not desc:
+            return None
+        return CandidateVideo(
+            platform=platform,
+            platform_video_id=vid or "tk_link",
+            video_url=_first_str(data.get("share_url"), fallback_url),
+            download_url=download_url or None,
+            cover_url=cover_url or None,
+            author_name=_first_str(author.get("nickname"), author.get("unique_id")),
+            title=(desc[:140] or f"TikTok 视频 ({vid or 'link'})"),
+            caption=desc,
+            published_at=str(data.get("create_time") or ""),
+            duration_sec=_parse_duration_str(data.get("duration")),
+            views=_to_int(stats.get("play_count") or stats.get("playCount")),
+            likes=_to_int(stats.get("digg_count") or stats.get("diggCount") or stats.get("like_count")),
+            comments=_to_int(stats.get("comment_count") or stats.get("commentCount")),
+            shares=_to_int(stats.get("share_count") or stats.get("shareCount")),
+        )
+
+    async def _fetch_single_tiktok(
+        self, client: httpx.AsyncClient, url: str, video_id_hint: str
+    ) -> CandidateVideo | None:
+        endpoints: list[tuple[str, dict[str, Any]]] = [
+            ("/api/v1/hybrid/video_data", {"url": url, "minimal": False}),
+            ("/api/v1/tiktok/app/v3/fetch_one_video_by_share_url_v2", {"share_url": url}),
+            ("/api/v1/tiktok/app/v3/fetch_one_video_by_share_url", {"share_url": url}),
+        ]
+        if video_id_hint and video_id_hint.isdigit() and len(video_id_hint) >= 12:
+            endpoints.append(
+                ("/api/v1/tiktok/app/v3/fetch_one_video_v3", {"aweme_id": video_id_hint})
+            )
+        if "douyin" in url.lower():
+            endpoints.insert(
+                1,
+                ("/api/v1/douyin/app/v3/fetch_one_video_by_share_url", {"share_url": url}),
+            )
+
+        best_fallback: CandidateVideo | None = None
+        for path, params in endpoints:
+            payload = await self._request_json(client, path, params)
+            if not payload:
+                continue
+            cand = self._parse_hybrid_single_payload(payload, url, platform="tiktok")
+            if not cand:
+                parsed = self._parse_tiktok_payload(payload)
+                cand = parsed[0] if parsed else None
+            if cand:
+                if cand.download_url:
+                    return cand
+                if best_fallback is None:
+                    best_fallback = cand
+        return best_fallback
+
+    async def _fetch_single_instagram(
+        self, client: httpx.AsyncClient, url: str, shortcode_hint: str
+    ) -> CandidateVideo | None:
+        endpoints: list[tuple[str, dict[str, Any]]] = [
+            ("/api/v1/instagram/v2/fetch_post_info", {"code_or_url": url}),
+            ("/api/v1/instagram/v1/fetch_post_by_url_v2", {"post_url": url}),
+            ("/api/v1/instagram/v1/fetch_post_by_url", {"post_url": url}),
+        ]
+        if shortcode_hint and shortcode_hint != "ig_link":
+            endpoints.append(
+                ("/api/v1/instagram/v2/fetch_post_info", {"code_or_url": shortcode_hint})
+            )
+
+        best_fallback: CandidateVideo | None = None
+        for path, params in endpoints:
+            payload = await self._request_json(client, path, params)
+            if not payload:
+                continue
+            parsed = self._parse_instagram_payload(payload)
+            if parsed:
+                cand = parsed[0]
+                if not cand.video_url or cand.video_url.endswith("/p/"):
+                    cand.video_url = url
+                if cand.download_url:
+                    return cand
+                if best_fallback is None:
+                    best_fallback = cand
+        return best_fallback
+
+    def _parse_youtube_single_payload(
+        self, payload: dict[str, Any], video_id: str, fallback_url: str
+    ) -> CandidateVideo | None:
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            return None
+
+        # Locate progressive MP4 download URL from formats / streamingData / videos.items
+        mp4_urls: list[tuple[int, str]] = []
+
+        def _collect_streams(obj: Any) -> None:
+            if isinstance(obj, list):
+                for el in obj:
+                    _collect_streams(el)
+            elif isinstance(obj, dict):
+                u = obj.get("url")
+                mime = str(obj.get("mimeType") or obj.get("mime_type") or obj.get("extension") or "").lower()
+                if isinstance(u, str) and u.startswith("http"):
+                    is_mp4 = "mp4" in mime or "video" in mime or ".mp4" in u.lower()
+                    has_audio = bool(
+                        obj.get("audioQuality")
+                        or obj.get("hasAudio")
+                        or obj.get("audioChannels")
+                        or obj.get("itag") in (18, 22)
+                    )
+                    if is_mp4 and (has_audio or not obj.get("audio_only")):
+                        height = _to_int(obj.get("height") or obj.get("qualityLabel"))
+                        score = (2000 if has_audio else 0) + (500 if 300 <= height <= 720 else 100)
+                        mp4_urls.append((score, u))
+                for k in ("formats", "streamingData", "videos", "items", "adaptiveFormats"):
+                    if k in obj:
+                        _collect_streams(obj[k])
+
+        _collect_streams(data)
+        mp4_urls.sort(key=lambda x: x[0], reverse=True)
+        download_url = mp4_urls[0][1] if mp4_urls else None
+
+        vid = _first_str(data.get("video_id"), data.get("id"), video_id)
+        title = _first_str(data.get("title"), data.get("headline"))
+        desc = _first_str(data.get("description"), title)
+        thumbs = data.get("thumbnails") or []
+        cover_url = _first_str(
+            thumbs,
+            data.get("thumbnail"),
+            f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg" if vid else "",
+        )
+        channel = data.get("channel") or {}
+        if not isinstance(channel, dict):
+            channel = {}
+        views = _to_int(
+            data.get("view_count") or data.get("number_of_views") or data.get("views")
+        )
+        likes = _to_int(data.get("like_count") or data.get("likes"))
+        dur = _parse_duration_str(
+            data.get("length_seconds") or data.get("video_length") or data.get("duration")
+        )
+        if not title and not download_url and views == 0:
+            return None
+        return CandidateVideo(
+            platform="youtube",
+            platform_video_id=vid or video_id,
+            video_url=fallback_url,
+            download_url=download_url,
+            cover_url=cover_url or None,
+            author_name=_first_str(channel.get("name"), data.get("author")),
+            title=(title[:140] or f"YouTube 视频 ({vid})"),
+            caption=desc,
+            published_at=_first_str(data.get("publish_date"), data.get("published_at")),
+            duration_sec=dur,
+            views=views,
+            likes=likes,
+        )
+
+    async def _fetch_single_youtube(
+        self, client: httpx.AsyncClient, url: str, video_id_hint: str
+    ) -> CandidateVideo | None:
+        vid = video_id_hint
+        if not vid or vid == "yt_link":
+            m = re.search(r"(?:/shorts/|[?&]v=|youtu\.be/)([A-Za-z0-9_-]{6,20})", url)
+            if m:
+                vid = m.group(1)
+        if not vid:
+            return None
+
+        endpoints = [
+            ("/api/v1/youtube/web_v2/get_video_info_v2", {"video_id": vid, "need_format": True}),
+            ("/api/v1/youtube/web_v2/get_video_info", {"video_id": vid, "need_format": True}),
+        ]
+        best_fallback: CandidateVideo | None = None
+        for path, params in endpoints:
+            payload = await self._request_json(client, path, params)
+            if not payload:
+                continue
+            cand = self._parse_youtube_single_payload(payload, vid, url)
+            if cand:
+                if cand.download_url:
+                    return cand
+                if best_fallback is None:
+                    best_fallback = cand
+        return best_fallback
