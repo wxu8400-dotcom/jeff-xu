@@ -206,6 +206,7 @@ class ConfigCheckOut(BaseModel):
     ai_deep_model: str
     ai_custom_base_url: bool
     database_kind: str
+    database_warning: str | None = None
     ffmpeg_available: bool
     mock_mode: bool
     password_protected: bool

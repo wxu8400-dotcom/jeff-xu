@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 
 from ..auth import require_auth
 from ..config import get_settings
+from ..database import get_active_db_kind, get_db_fallback_warning
 from ..schemas import ConfigCheckOut
 from ..services.ai_client import UnifiedAIClient
 from ..services.video_processor import is_ffmpeg_available
@@ -43,7 +44,8 @@ def config_check() -> ConfigCheckOut:
         ai_fast_model=fast_model,
         ai_deep_model=deep_model,
         ai_custom_base_url=custom_url,
-        database_kind=cfg.database_kind(),
+        database_kind=get_active_db_kind(),
+        database_warning=get_db_fallback_warning(),
         ffmpeg_available=is_ffmpeg_available(),
         mock_mode=cfg.enable_mock_mode,
         password_protected=bool(cfg.app_access_password.strip()),

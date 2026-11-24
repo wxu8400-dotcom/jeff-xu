@@ -190,6 +190,7 @@ export interface ConfigCheck {
   ai_deep_model: string;
   ai_custom_base_url: boolean;
   database_kind: string;
+  database_warning?: string | null;
   ffmpeg_available: boolean;
   mock_mode: boolean;
   password_protected: boolean;

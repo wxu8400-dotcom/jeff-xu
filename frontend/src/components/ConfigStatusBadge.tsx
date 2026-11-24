@@ -42,11 +42,13 @@ export const ConfigStatusBadge: React.FC<Props> = ({ config }) => {
     },
     {
       label: "云端历史数据库",
-      ok: true,
-      detail:
-        config.database_kind === "postgresql"
-          ? "PostgreSQL（云端永久保存）"
-          : "SQLite（本地模式）",
+      ok: !config.database_warning,
+      detail: config.database_warning
+        ? config.database_warning
+        : config.database_kind === "postgresql"
+        ? "PostgreSQL（云端永久保存）"
+        : "SQLite（本地模式）",
+      optional: Boolean(config.database_warning),
     },
     {
       label: "FFmpeg 视频压缩与一键成片拼接",

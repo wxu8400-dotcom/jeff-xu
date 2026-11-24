@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import quote
 
@@ -24,7 +25,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.orm import Session, defer
 
 from ..auth import require_auth
-from ..config import get_settings
+from ..config import DATA_DIR, get_settings
 from ..database import get_db, get_session_factory
 from ..models import GeneratedAsset, ScanSession, VideoRecord
 from ..schemas import (
@@ -59,6 +60,89 @@ router = APIRouter(
 )
 
 _studio_tasks: set[asyncio.Task] = set()
+MEDIA_DIR = DATA_DIR / "media"
+# Only mirror compact images (<= 450KB) into DB file_data; NEVER store multi-MB MP4s in Postgres
+# so Neon Free Tier storage (512MB) and network transfer (5GB/mo) never get exhausted!
+MAX_DB_BLOB_BYTES = 450_000
+
+
+def _ext_for_mime(mime_type: str | None) -> str:
+    m = (mime_type or "").lower()
+    if "video" in m:
+        return "mp4"
+    if "audio" in m:
+        return "mp3"
+    return "jpg"
+
+
+def _media_path(asset_id: str, mime_type: str | None) -> Path:
+    MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+    return MEDIA_DIR / f"{asset_id}.{_ext_for_mime(mime_type)}"
+
+
+def _save_asset_media(asset: GeneratedAsset, data: bytes) -> None:
+    """Save media to local disk (fast zero-egress streaming) and mirror small images in DB."""
+    path = _media_path(asset.id, asset.mime_type)
+    path.write_bytes(data)
+    if asset.asset_type == "image" and len(data) <= MAX_DB_BLOB_BYTES:
+        asset.file_data = data
+    else:
+        asset.file_data = None
+
+
+def _delete_local_media(asset_id: str) -> None:
+    if not MEDIA_DIR.exists():
+        return
+    for ext in ("mp4", "jpg", "mp3", "png", "webp"):
+        p = MEDIA_DIR / f"{asset_id}.{ext}"
+        if p.exists():
+            try:
+                p.unlink()
+            except OSError:
+                pass
+
+
+def _find_local_media_path(asset_id: str, mime_type: str | None) -> Path | None:
+    p = _media_path(asset_id, mime_type)
+    if p.exists() and p.stat().st_size > 0:
+        return p
+    return None
+
+
+async def _load_asset_bytes(row: GeneratedAsset, db: Session) -> bytes | None:
+    local = _find_local_media_path(row.id, row.mime_type)
+    if local is not None:
+        return local.read_bytes()
+    # Fetch file_data lazily only if local file cache missed
+    db_blob = db.execute(
+        select(GeneratedAsset.file_data).where(GeneratedAsset.id == row.id)
+    ).scalar_one_or_none()
+    if db_blob:
+        raw = bytes(db_blob)
+        _media_path(row.id, row.mime_type).write_bytes(raw)
+        return raw
+    if row.media_url and row.media_url.startswith("http"):
+        try:
+            async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
+                resp = await client.get(row.media_url)
+                if resp.status_code == 200 and len(resp.content) > 200:
+                    _media_path(row.id, row.mime_type).write_bytes(resp.content)
+                    return resp.content
+        except Exception as exc:
+            logger.warning("Failed to fetch remote media_url for %s: %s", row.id, exc)
+    return None
+
+
+def _iter_file_chunks(path: Path, start: int, end: int, chunk_size: int = 262_144):
+    with path.open("rb") as f:
+        f.seek(start)
+        remaining = end - start + 1
+        while remaining > 0:
+            chunk = f.read(min(chunk_size, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
 
 
 def _track_task(task: asyncio.Task) -> None:
@@ -269,10 +353,10 @@ async def _run_image_job(
                 row.provider = res.provider
                 row.model_name = res.model_name
                 row.mime_type = res.mime_type
-                row.file_data = res.image_bytes
                 row.width = res.width
                 row.height = res.height
                 row.error_message = None
+                _save_asset_media(row, res.image_bytes)
                 db.commit()
         finally:
             db.close()
@@ -319,11 +403,11 @@ async def _run_kling_video_job(
                 row.provider = res.provider
                 row.model_name = res.model_name
                 row.mime_type = res.mime_type
-                row.file_data = res.video_bytes
                 row.media_url = res.media_url
                 row.external_task_id = res.external_task_id
                 row.duration_sec = res.duration_sec
                 row.error_message = None
+                _save_asset_media(row, res.video_bytes)
                 db.commit()
         finally:
             db.close()
@@ -565,8 +649,13 @@ async def generate_single_video_clip(
             detail="尚未配置可灵 Kling API Key（请在 Render 环境变量配置 KLING_API_KEY，或官方 KLING_ACCESS_KEY + KLING_SECRET_KEY）。提示：即使暂不配置可灵，也可直接点「一键合并成片」将生成好的分镜图自动转为推镜动态成片！",
         )
 
-    src_img = db.get(GeneratedAsset, body.source_image_asset_id)
-    if not src_img or src_img.video_id != video.id or not src_img.file_data:
+    src_img = db.scalars(
+        select(GeneratedAsset)
+        .options(defer(GeneratedAsset.file_data))
+        .where(GeneratedAsset.id == body.source_image_asset_id)
+    ).first()
+    src_bytes = await _load_asset_bytes(src_img, db) if src_img and src_img.video_id == video.id else None
+    if not src_img or not src_bytes:
         raise HTTPException(status_code=400, detail="请先为该分镜生成首帧商品图，再调用可灵图生视频")
 
     chosen_kling_model = body.model_override.strip() or cfg.kling_model_name
@@ -592,7 +681,7 @@ async def generate_single_video_clip(
     task = asyncio.create_task(
         _run_kling_video_job(
             asset_id=asset.id,
-            image_bytes=bytes(src_img.file_data),
+            image_bytes=src_bytes,
             prompt=body.prompt,
             negative_prompt=body.negative_prompt,
             duration_sec=body.duration_sec,
@@ -728,9 +817,10 @@ async def upload_real_shoot_clip(
         status="completed",
         prompt_used="",
         mime_type=file.content_type or "video/mp4",
-        file_data=data,
     )
     db.add(asset)
+    db.flush()
+    _save_asset_media(asset, data)
     db.commit()
     db.refresh(asset)
     return _serialize_asset(asset)
@@ -763,9 +853,10 @@ async def upload_custom_bgm(
         status="completed",
         prompt_used="",
         mime_type=file.content_type or "audio/mpeg",
-        file_data=data,
     )
     db.add(asset)
+    db.flush()
+    _save_asset_media(asset, data)
     db.commit()
     db.refresh(asset)
     return _serialize_asset(asset)
@@ -786,6 +877,7 @@ async def stitch_final_video(
     video, session = _get_video_and_session(db, video_id)
     stmt = (
         select(GeneratedAsset)
+        .options(defer(GeneratedAsset.file_data))
         .where(
             GeneratedAsset.video_id == video.id,
             GeneratedAsset.status == "completed",
@@ -802,20 +894,23 @@ async def stitch_final_video(
     if body.asset_ids:
         for aid in body.asset_ids:
             row = by_id.get(aid)
-            if not row or not row.file_data:
+            if not row:
+                continue
+            raw_bytes = await _load_asset_bytes(row, db)
+            if not raw_bytes:
                 continue
             if row.asset_type in ("video_clip", "uploaded_clip"):
-                ordered_media.append(("video", bytes(row.file_data), row.duration_sec or 5.0))
+                ordered_media.append(("video", raw_bytes, row.duration_sec or 5.0))
                 used_labels.append(row.scene_title or f"镜头{row.shot_no}")
             elif row.asset_type == "image" and body.include_images_as_motion:
-                ordered_media.append(("image", bytes(row.file_data), body.image_clip_duration))
+                ordered_media.append(("image", raw_bytes, body.image_clip_duration))
                 used_labels.append(row.scene_title or f"镜头{row.shot_no}")
     else:
         latest_upload: dict[int, GeneratedAsset] = {}
         latest_ai_vid: dict[int, GeneratedAsset] = {}
         latest_img: dict[int, GeneratedAsset] = {}
         for row in completed:
-            if not row.file_data or not row.shot_no or row.shot_no < 1:
+            if not row.shot_no or row.shot_no < 1:
                 continue
             if row.asset_type == "uploaded_clip":
                 latest_upload.setdefault(row.shot_no, row)
@@ -832,16 +927,24 @@ async def stitch_final_video(
         for sno in shot_nos:
             if sno in latest_upload:
                 r = latest_upload[sno]
-                ordered_media.append(("video", bytes(r.file_data or b""), r.duration_sec or 5.0))
-                used_labels.append(f"分镜{sno}(实拍)")
-            elif sno in latest_ai_vid:
+                raw = await _load_asset_bytes(r, db)
+                if raw:
+                    ordered_media.append(("video", raw, r.duration_sec or 5.0))
+                    used_labels.append(f"分镜{sno}(实拍)")
+                    continue
+            if sno in latest_ai_vid:
                 r = latest_ai_vid[sno]
-                ordered_media.append(("video", bytes(r.file_data or b""), r.duration_sec or 5.0))
-                used_labels.append(f"分镜{sno}(可灵AI)")
-            elif body.include_images_as_motion and sno in latest_img:
+                raw = await _load_asset_bytes(r, db)
+                if raw:
+                    ordered_media.append(("video", raw, r.duration_sec or 5.0))
+                    used_labels.append(f"分镜{sno}(可灵AI)")
+                    continue
+            if body.include_images_as_motion and sno in latest_img:
                 r = latest_img[sno]
-                ordered_media.append(("image", bytes(r.file_data or b""), body.image_clip_duration))
-                used_labels.append(f"分镜{sno}(AI图转动态)")
+                raw = await _load_asset_bytes(r, db)
+                if raw:
+                    ordered_media.append(("image", raw, body.image_clip_duration))
+                    used_labels.append(f"分镜{sno}(AI图转动态)")
 
     if not ordered_media:
         raise HTTPException(
@@ -884,11 +987,12 @@ async def stitch_final_video(
 
     if body.bgm_mode == "custom":
         bgm_row = by_id.get(body.bgm_asset_id) if body.bgm_asset_id else next(
-            (r for r in completed if r.asset_type == "bgm_audio" and r.file_data), None
+            (r for r in completed if r.asset_type == "bgm_audio"), None
         )
-        if bgm_row and bgm_row.file_data:
-            bgm_bytes = bytes(bgm_row.file_data)
-            audio_tags.append(f"BGM({bgm_row.scene_title[:16]})")
+        if bgm_row:
+            bgm_bytes = await _load_asset_bytes(bgm_row, db)
+            if bgm_bytes:
+                audio_tags.append(f"BGM({bgm_row.scene_title[:16]})")
     elif body.bgm_mode in ("ambient_chill", "upbeat_pulse"):
         bgm_bytes = await asyncio.to_thread(
             generate_builtin_bgm_mp3, body.bgm_mode, total_dur
@@ -927,12 +1031,13 @@ async def stitch_final_video(
         status="completed",
         prompt_used=summary_label,
         mime_type="video/mp4",
-        file_data=final_bytes,
         duration_sec=total_dur,
         width=720,
         height=1280,
     )
     db.add(final_asset)
+    db.flush()
+    _save_asset_media(final_asset, final_bytes)
     db.commit()
     db.refresh(final_asset)
     return _serialize_asset(final_asset)
@@ -951,17 +1056,10 @@ def delete_studio_asset(
     row = db.scalars(stmt).first()
     if not row:
         raise HTTPException(status_code=404, detail="素材不存在")
+    _delete_local_media(row.id)
     db.delete(row)
     db.commit()
     return {"ok": True}
-
-
-def _iter_bytes_chunks(buf: bytes, start: int, end: int, chunk_size: int = 262_144):
-    pos = start
-    while pos <= end:
-        nxt = min(pos + chunk_size, end + 1)
-        yield buf[pos:nxt]
-        pos = nxt
 
 
 @router.get("/assets/{asset_id}/file")
@@ -971,23 +1069,27 @@ async def get_studio_asset_file(
     db: Annotated[Session, Depends(get_db)],
     download: bool = Query(default=False),
 ) -> Response:
-    row = db.get(GeneratedAsset, asset_id)
+    # Always defer file_data first so streaming from local disk costs ZERO database egress!
+    row = db.scalars(
+        select(GeneratedAsset)
+        .options(defer(GeneratedAsset.file_data))
+        .where(GeneratedAsset.id == asset_id)
+    ).first()
     if not row:
         raise HTTPException(status_code=404, detail="素材不存在")
 
-    data = bytes(row.file_data) if row.file_data else None
-    if not data and row.media_url and row.media_url.startswith("http"):
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            resp = await client.get(row.media_url)
-            if resp.status_code == 200:
-                data = resp.content
+    local_path = _find_local_media_path(row.id, row.mime_type)
+    if local_path is None:
+        raw = await _load_asset_bytes(row, db)
+        if raw:
+            local_path = _find_local_media_path(row.id, row.mime_type)
 
-    if not data:
-        raise HTTPException(status_code=404, detail="素材文件尚未生成完毕")
+    if local_path is None or not local_path.exists():
+        raise HTTPException(status_code=404, detail="素材文件尚未生成完毕或已过期，请重新合成")
 
-    total_len = len(data)
+    total_len = local_path.stat().st_size
     mime = row.mime_type or "application/octet-stream"
-    ext = "mp4" if "video" in mime else ("mp3" if "audio" in mime else "jpg")
+    ext = _ext_for_mime(mime)
     safe_name = (row.scene_title or row.id).replace("/", "-").replace("\\", "-").replace('"', "")[:60]
     ascii_fallback = f"viral-radar-{row.id[:8]}.{ext}"
 
@@ -1001,7 +1103,6 @@ async def get_studio_asset_file(
             f'attachment; filename="{ascii_fallback}"; filename*=UTF-8\'\'{encoded}'
         )
 
-    # Full HTTP Range (206 Partial Content) support — required by Safari/Chrome/iOS <video> & resumable downloads!
     range_header = request.headers.get("range")
     if range_header and range_header.startswith("bytes=") and not download:
         spec = range_header[len("bytes=") :].split(",")[0].strip()
@@ -1027,7 +1128,7 @@ async def get_studio_asset_file(
                 "Content-Length": str(chunk_len),
             }
             return StreamingResponse(
-                _iter_bytes_chunks(data, start, end),
+                _iter_file_chunks(local_path, start, end),
                 status_code=206,
                 media_type=mime,
                 headers=headers_206,
@@ -1040,7 +1141,7 @@ async def get_studio_asset_file(
         "Content-Length": str(total_len),
     }
     return StreamingResponse(
-        _iter_bytes_chunks(data, 0, total_len - 1),
+        _iter_file_chunks(local_path, 0, total_len - 1),
         status_code=200,
         media_type=mime,
         headers=headers_200,
