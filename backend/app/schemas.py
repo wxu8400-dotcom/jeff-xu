@@ -79,6 +79,7 @@ class DirectorPlan(BaseModel):
     original_video_prompt_en: str = ""
     current_master_prompt_cn: str = ""
     current_master_prompt_en: str = ""
+    negative_constraints: str = ""
     has_user_customized: bool = False
     keyframe_previews: list[str] = Field(default_factory=list)
     ai_character_profile_cn: str = ""
@@ -155,6 +156,7 @@ class DirectorRevisionResponse(BaseModel):
     changed_shots: list[int] = Field(default_factory=list)
     current_master_prompt_cn: str = ""
     current_master_prompt_en: str = ""
+    negative_constraints: str = ""
     ai_character_profile_cn: str = ""
     ai_character_profile_en: str = ""
     storyboard: list[StoryboardShot] = Field(default_factory=list)
@@ -164,6 +166,11 @@ class DirectorRevisionResponse(BaseModel):
     adapted_script_en: str = ""
     learned_memories: list[LearnedMemoryItem] = Field(default_factory=list)
     analysis: VideoDeepAnalysis | None = None
+
+
+class RefinedImagePromptResponse(BaseModel):
+    refined_prompt_en: str
+    refined_prompt_cn: str = ""
 
 
 class DirectorMemoryOut(BaseModel):
@@ -326,6 +333,7 @@ class StudioStateOut(BaseModel):
     product_name: str
     has_product_reference: bool
     product_reference_preview: str | None = None
+    product_reference_previews: list[str] = Field(default_factory=list)
     default_image_provider: Literal["gemini", "openai"] = "gemini"
     gemini_image_configured: bool = False
     openai_image_configured: bool = False
@@ -339,6 +347,18 @@ class GenerateImageRequest(BaseModel):
     shot_no: int | None = None
     scene_title: str = ""
     prompt: str
+    provider: Literal["gemini", "openai"] | None = None
+    model_override: str = ""
+    aspect_ratio: str = "9:16"
+    use_character_ref: bool = True
+
+
+class RefineImageRequest(BaseModel):
+    slot_index: int = 0
+    shot_no: int | None = None
+    scene_title: str = ""
+    base_prompt: str = ""
+    feedback: str
     provider: Literal["gemini", "openai"] | None = None
     model_override: str = ""
     aspect_ratio: str = "9:16"

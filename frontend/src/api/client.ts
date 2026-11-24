@@ -173,6 +173,29 @@ export const api = {
       }
     ),
 
+  refineStudioImage: (
+    videoId: string,
+    payload: {
+      slot_index: number;
+      shot_no?: number | null;
+      scene_title: string;
+      base_prompt: string;
+      feedback: string;
+      provider: "gemini" | "openai";
+      model_override?: string;
+      aspect_ratio?: string;
+      use_character_ref?: boolean;
+    }
+  ) =>
+    apiFetch<GeneratedAsset>(
+      `/api/studio/videos/${encodeURIComponent(videoId)}/refine-image`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }
+    ),
+
   generateAllStudioImages: (
     videoId: string,
     payload: {

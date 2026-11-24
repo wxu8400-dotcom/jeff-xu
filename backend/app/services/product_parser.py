@@ -101,11 +101,11 @@ def parse_product_materials(
                     ai_images.append((resized, "image/jpeg"))
                 thumb_url = make_thumbnail_data_url(item.data, max_side=280)
                 ref_url = None
-                # Store crisp reference image (max 1024px JPEG) for first 2 product photos so V2.0
-                # one-click image generation works across Render restarts without re-uploading.
+                # Store crisp reference images (max 960px JPEG) for up to 5 multi-angle product photos
+                # so AI prompt rewriting & image generation see front/side/detail angles accurately.
                 existing_refs = sum(1 for a in assets_meta if a.get("reference_image"))
-                if existing_refs < 2:
-                    ref_bytes = _resize_jpeg(item.data, max_side=1024, quality=85)
+                if existing_refs < 5:
+                    ref_bytes = _resize_jpeg(item.data, max_side=960, quality=82)
                     ref_b64 = base64.b64encode(ref_bytes).decode("ascii")
                     ref_url = f"data:image/jpeg;base64,{ref_b64}"
                 assets_meta.append(

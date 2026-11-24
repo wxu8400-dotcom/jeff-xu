@@ -364,8 +364,9 @@ def build_director_revision_prompt(
 {{
   "director_reply": "1~2句简洁确认回复（严禁出现'分镜'二字）",
   "changed_shots": [1, 2, 3],
-  "current_master_prompt_cn": "按用户最新意见重新编写并润色好的完整连贯中文视频提示词（覆盖开头到结尾全部画面，不写分镜编号）",
+  "current_master_prompt_cn": "按用户最新意见重新编写并润色好的完整连贯中文视频提示词（800~1400字，含【产品一致性】【人物与场景】【时间轴完整动作与运镜脚本】【摄影与声音】）",
   "current_master_prompt_en": "Complete cohesive English photorealistic video prompt covering opening frame to ending frame",
+  "negative_constraints": "独立的一段【统一排除要求（负向约束）】，例如：避免产品变形、颜色变化、扶手/轮廓/纹理消失、配件数量变化、多余手指、人物换脸、背景杂物带入、文字或水印",
   "ai_character_profile_cn": "全片统一的写实 AI 人物中文设定",
   "ai_character_profile_en": "Consistent photorealistic real human English character profile",
   "adapted_script_cn": "简短配套中文口播（若原片纯画面无口播可简短写一句高冲击文案）",
@@ -422,4 +423,32 @@ def build_director_revision_prompt(
       "negative_prompt": "变形, 模糊, 卡通, 动漫, 穿模, 多余手指, 闪烁, 水印, 杂乱文字"
     }}
   ]
+}}"""
+
+
+def build_image_refinement_prompt(
+    *,
+    product_name: str,
+    product_form: str,
+    base_prompt: str,
+    user_feedback: str,
+    character_profile_en: str = "",
+) -> str:
+    return f"""你是专业商业广告生图提示词精修师。
+用户刚刚预览了 AI 生成的这张画面图，并对局部不满意，提出了具体的中文修正意见。
+请你在**严格保留原画面主体构图、核心场景与上传商品外观 100% 一致**的前提下，只精准落实用户的修正意见（例如调整人物长相/年龄/发型/服装、调亮光线、放大商品、去掉杂物等），输出精修后的中英文生图提示词！
+
+目标商品：{product_name}（{product_form}）
+统一人物参考设定（若用户没要求改人物则保持，若用户要求改人物则按用户最新要求替换）：{character_profile_en or "无"}
+
+原图生图提示词：
+{base_prompt}
+
+用户对这张图的中文修正意见（最高优先级，必须准确落实！）：
+{user_feedback}
+
+请严格输出纯 JSON：
+{{
+  "refined_prompt_en": "Complete, photorealistic vertical 9:16 English image generation prompt applying the user's exact visual fix while preserving the exact uploaded product (NO cartoon, NO anime, NO text, NO watermark)",
+  "refined_prompt_cn": "精修后的中文画面提示词对照"
 }}"""

@@ -57,7 +57,7 @@ export const ProductUploader: React.FC<Props> = ({
         </div>
         <div>
           <label className="block text-xs font-medium text-slate-300 mb-1.5">
-            上传产品资料（支持图片、短视频、PDF、Word、TXT 多选）
+            上传多角度商品实拍图（可一次多选 1~5 张正面/侧面/细节图，也支持视频/文档）
           </label>
           <div
             onClick={() => inputRef.current?.click()}
@@ -69,7 +69,7 @@ export const ProductUploader: React.FC<Props> = ({
             className="cursor-pointer px-3.5 py-2.5 rounded-xl bg-slate-950 border border-dashed border-slate-600 hover:border-sky-400 text-xs sm:text-sm text-slate-300 flex items-center justify-center gap-2 transition"
           >
             <UploadCloud className="w-4 h-4 text-sky-400 shrink-0" />
-            <span className="truncate">点击选择或拖入图片 / 视频 / 文档</span>
+            <span className="truncate">点击多选或拖入多角度商品图（最多保留 5 张用于 AI 还原）</span>
           </div>
           <input
             ref={inputRef}

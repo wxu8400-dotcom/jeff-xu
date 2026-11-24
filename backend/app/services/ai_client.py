@@ -21,6 +21,7 @@ from ..schemas import (
     PreliminaryScreeningBatch,
     PreliminaryScreeningItem,
     ProductDNA,
+    RefinedImagePromptResponse,
     ReplaceabilityAnalysis,
     SearchQueries,
     ShootingRequirements,
@@ -929,10 +930,11 @@ class UnifiedAIClient:
                 )
             return (
                 DirectorRevisionResponse(
-                    director_reply=f"已按你的最新修改内容重新编写好完整提示词，未提及的画面细节保持原视频不变，并已记入长期记忆库。请核对上方新提示词，满意即可点击确认生成！",
+                    director_reply="已按你的最新修改内容重新编写好完整提示词，未提及的画面细节保持原视频不变，并已记入长期记忆库。请核对下方新提示词与排除约束，满意即可点击确认生成！",
                     changed_shots=[1],
                     current_master_prompt_cn=updated.director_plan.current_master_prompt_cn,
                     current_master_prompt_en=updated.director_plan.current_master_prompt_en,
+                    negative_constraints="避免商品变形、颜色变化、纹理消失、多余手指、人物换脸、背景杂物带入、文字或水印。",
                     ai_character_profile_cn=updated.director_plan.ai_character_profile_cn,
                     ai_character_profile_en=updated.director_plan.ai_character_profile_en,
                     storyboard=updated.storyboard,
@@ -942,6 +944,17 @@ class UnifiedAIClient:
                     analysis=None,
                 ),
                 TokenUsage(input_tokens=1800, output_tokens=900),
+            )  # type: ignore[return-value]
+
+        if schema_cls is RefinedImagePromptResponse:
+            base = str(ctx.get("base_prompt") or "")
+            fb = str(ctx.get("feedback") or "")
+            return (
+                RefinedImagePromptResponse(
+                    refined_prompt_en=f"{base} [Refined per user fix: {fb}]".strip(),
+                    refined_prompt_cn=f"已按意见精修：{fb}",
+                ),
+                TokenUsage(input_tokens=400, output_tokens=180),
             )  # type: ignore[return-value]
 
         raise ValueError(f"Unsupported mock schema: {schema_cls}")

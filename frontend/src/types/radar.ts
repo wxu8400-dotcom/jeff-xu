@@ -97,6 +97,7 @@ export interface DirectorPlan {
   original_video_prompt_en?: string;
   current_master_prompt_cn?: string;
   current_master_prompt_en?: string;
+  negative_constraints?: string;
   has_user_customized?: boolean;
   keyframe_previews?: string[];
   ai_character_profile_cn?: string;
@@ -274,6 +275,7 @@ export interface StudioState {
   product_name: string;
   has_product_reference: boolean;
   product_reference_preview?: string | null;
+  product_reference_previews?: string[];
   default_image_provider: "gemini" | "openai";
   gemini_image_configured: boolean;
   openai_image_configured: boolean;

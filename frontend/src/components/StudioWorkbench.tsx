@@ -82,6 +82,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [forceShowGenerator, setForceShowGenerator] = useState(false);
   const [showSegmentDetails, setShowSegmentDetails] = useState(false);
+  const [imageFixInputs, setImageFixInputs] = useState<Record<number, string>>({});
 
   const refInputRef = useRef<HTMLInputElement | null>(null);
   const genSectionRef = useRef<HTMLDivElement | null>(null);
@@ -254,6 +255,37 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
       await loadState(true);
     } catch (err) {
       onToast(err instanceof Error ? err.message : "生图失败");
+    } finally {
+      setBusySlots((prev) => ({ ...prev, [key]: false }));
+    }
+  };
+
+  const handleRefineImage = async (slotIndex: number, shot?: StoryboardShot) => {
+    const fb = (imageFixInputs[slotIndex] || "").trim();
+    if (!fb) {
+      onToast("请先输入你对这张图的中文修改意见（如：人物换年轻点、光线调亮、沙发放大...）");
+      return;
+    }
+    const key = `img-${slotIndex}`;
+    setBusySlots((prev) => ({ ...prev, [key]: true }));
+    try {
+      const info = getSlotPrompt(slotIndex, shot);
+      await api.refineStudioImage(video.id, {
+        slot_index: slotIndex,
+        shot_no: slotIndex === 0 ? null : slotIndex,
+        scene_title: info.title,
+        base_prompt: info.prompt,
+        feedback: fb,
+        provider: imageProvider,
+        model_override: imageProvider === "openai" ? openaiModel : "",
+        aspect_ratio: info.ratio,
+        use_character_ref: useCharacterRef,
+      });
+      setImageFixInputs((prev) => ({ ...prev, [slotIndex]: "" }));
+      onToast(`🎨 已按你的意见重绘完成：${info.title}`);
+      await loadState(true);
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : "单图修正重绘失败");
     } finally {
       setBusySlots((prev) => ({ ...prev, [key]: false }));
     }
@@ -496,7 +528,19 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
       <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            {studio.product_reference_preview ? (
+            {studio.product_reference_previews && studio.product_reference_previews.length > 0 ? (
+              <div className="flex items-center gap-1.5 shrink-0">
+                {studio.product_reference_previews.slice(0, 5).map((src, idx) => (
+                  <img
+                    key={idx}
+                    src={src}
+                    alt={`商品参考图 ${idx + 1}`}
+                    onClick={() => setLightboxUrl(src)}
+                    className="w-11 h-11 rounded-xl object-cover border border-sky-500/40 cursor-zoom-in"
+                  />
+                ))}
+              </div>
+            ) : studio.product_reference_preview ? (
               <img
                 src={studio.product_reference_preview}
                 alt="商品参考图"
@@ -864,10 +908,122 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
 
         {!studio.kling_configured && (
           <div className="text-[11px] text-slate-400 bg-slate-900/70 rounded-xl px-3 py-2">
-            💡 <b>省钱技巧</b>：即使暂未配置可灵 Kling Key，点完「1. 一键生成全部分镜商品图」后，直接点「3. 一键合成 9:16 成片 MP4」，系统会自动把所有商品分镜图加上电影级平滑推拉运镜（并混剪你上传的实拍片段），<b>零额外费用直接出完整 MP4 成片</b>！配好可灵 Key 后可一键升级为可灵动态视频。
+            💡 <b>省钱技巧</b>：即使暂未配置可灵 Kling Key，点完「1. 一键生成画面首帧图」后，直接点「3. 一键合成 9:16 成片 MP4」，系统会自动把所有画面图加上电影级平滑推拉运镜直接出完整 MP4 成片！
           </div>
         )}
       </div>
+
+      {/* Visual Image Confirmation & Per-Image Chinese Refinement Grid */}
+      {Object.keys(latestImageBySlot).length > 0 && (
+        <div className="bg-slate-950 border border-emerald-500/35 rounded-2xl p-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-bold text-emerald-300 flex items-center gap-1.5">
+                <ImageIcon className="w-4 h-4" />
+                🖼️ 画面图确认与单图中文修正（满意后再点上方「2. 一键可灵生成动态视频」）
+              </h3>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                点图片可放大细看；哪张人物长相、光线或商品位置不满意，直接在该图下方写中文意见点「按意见重绘」，只重画这一张！
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {[
+              ...(latestImageBySlot[0] ? [{ slot: 0, label: "主视觉封面图", shot: undefined as StoryboardShot | undefined }] : []),
+              ...storyboard
+                .filter((s) => Boolean(latestImageBySlot[s.shot_no]))
+                .map((s) => ({
+                  slot: s.shot_no,
+                  label: `画面 ${s.shot_no}（${s.time_range}）`,
+                  shot: s,
+                })),
+            ].map(({ slot, label, shot }) => {
+              const asset = latestImageBySlot[slot];
+              const isBusy = busySlots[`img-${slot}`] || asset?.status === "processing";
+              return (
+                <div
+                  key={slot}
+                  className="bg-slate-900/80 border border-slate-800 rounded-xl p-3 flex flex-col gap-2.5"
+                >
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="font-bold text-white">{label}</span>
+                    {asset?.status === "completed" && (
+                      <a
+                        href={`${asset.file_url}?download=1`}
+                        className="text-[11px] text-sky-400 hover:text-sky-300 inline-flex items-center gap-1"
+                      >
+                        <Download className="w-3 h-3" /> 下载
+                      </a>
+                    )}
+                  </div>
+
+                  {asset?.status === "completed" ? (
+                    <img
+                      src={asset.file_url}
+                      alt={label}
+                      onClick={() => setLightboxUrl(asset.file_url)}
+                      className="w-full aspect-[9/16] max-h-72 object-cover rounded-lg border border-slate-700 cursor-zoom-in hover:border-sky-400 transition bg-black"
+                    />
+                  ) : isBusy ? (
+                    <div className="w-full h-56 rounded-lg bg-slate-950 border border-slate-800 flex flex-col items-center justify-center gap-2 text-xs text-sky-300">
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      <span>正在生成/重绘画面...</span>
+                    </div>
+                  ) : (
+                    <div className="w-full h-32 rounded-lg bg-rose-500/10 border border-rose-500/30 p-2.5 text-[11px] text-rose-300">
+                      生成失败：{asset?.error_message || "未知错误"}
+                    </div>
+                  )}
+
+                  {/* Direct Chinese Refinement Input for THIS Image */}
+                  <div className="space-y-1.5 mt-auto">
+                    <input
+                      type="text"
+                      value={imageFixInputs[slot] || ""}
+                      onChange={(e) =>
+                        setImageFixInputs((prev) => ({ ...prev, [slot]: e.target.value }))
+                      }
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          handleRefineImage(slot, shot);
+                        }
+                      }}
+                      placeholder="不满意？写修改意见（如：人物换28岁欧美金发美女、光线调亮...）"
+                      className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 focus:border-sky-400 focus:outline-none text-[11px] text-slate-100 placeholder-slate-500"
+                    />
+                    <div className="flex gap-1.5">
+                      <button
+                        type="button"
+                        disabled={isBusy || !(imageFixInputs[slot] || "").trim()}
+                        onClick={() => handleRefineImage(slot, shot)}
+                        className="flex-1 py-1.5 px-2.5 rounded-lg bg-sky-500 hover:bg-sky-400 disabled:opacity-45 text-slate-950 font-bold text-[11px] inline-flex items-center justify-center gap-1"
+                      >
+                        {isBusy ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <Wand2 className="w-3 h-3" />
+                        )}
+                        按意见重绘这张图
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isBusy}
+                        onClick={() => handleGenerateOneImage(slot, shot)}
+                        className="py-1.5 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-45 text-slate-200 text-[11px] inline-flex items-center gap-1"
+                        title="直接再抽一张"
+                      >
+                        <RefreshCw className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Final Stitched Video Showcase */}
       {finalVideos.length > 0 && (

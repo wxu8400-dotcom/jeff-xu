@@ -508,5 +508,60 @@ def test_first_frame_inclusive_timestamps_and_unified_prompt_workflow(make_clien
         assert lock.json()["analysis_json"]["director_plan"]["current_master_prompt_cn"].endswith("（终版定稿）")
 
 
+def test_multi_angle_product_photos_and_per_image_chinese_refinement(make_client):
+    with make_client(password="", mock_mode=True) as client:
+        # Upload 4 multi-angle product photos alongside a direct video link
+        resp = client.post(
+            "/api/scans/analyze-urls",
+            data={
+                "product_name_override": "cc 沙发",
+                "product_text": "焦糖橙色奢华真皮双人沙发，多角度实拍",
+                "urls": "https://www.tiktok.com/t/ZPNBMH3e7/",
+            },
+            files=[
+                ("files", ("front.jpg", _make_sample_jpg((210, 120, 40)), "image/jpeg")),
+                ("files", ("side.jpg", _make_sample_jpg((200, 115, 35)), "image/jpeg")),
+                ("files", ("back.jpg", _make_sample_jpg((190, 110, 30)), "image/jpeg")),
+                ("files", ("detail.jpg", _make_sample_jpg((220, 130, 45)), "image/jpeg")),
+            ],
+        )
+        assert resp.status_code == 200
+        detail = _wait_scan_done(client, resp.json()["session_id"])
+        video_id = detail["videos"][0]["id"]
+
+        # Studio state exposes all 4 multi-angle product previews
+        state = client.get(f"/api/studio/videos/{video_id}/assets").json()
+        assert state["has_product_reference"] is True
+        assert len(state["product_reference_previews"]) == 4
+
+        # Revise prompt returns dedicated negative_constraints
+        rev = client.post(
+            f"/api/studio/videos/{video_id}/revise-plan",
+            json={"feedback": "把直升机改为豪华客机，人物换成欧美贵妇，扔缩小版沙发弹出正常尺寸沙发"},
+        )
+        assert rev.status_code == 200
+        assert rev.json()["analysis_json"]["director_plan"]["negative_constraints"]
+
+        # Per-image Chinese refinement endpoint re-generates that specific image with the fix
+        refined = client.post(
+            f"/api/studio/videos/{video_id}/refine-image",
+            json={
+                "slot_index": 1,
+                "shot_no": 1,
+                "scene_title": "画面 1",
+                "base_prompt": "Woman seated inside private jet cabin holding miniature sofa",
+                "feedback": "人物换更年轻的28岁欧美金发美女，机舱光线调亮一点",
+                "provider": "openai",
+                "aspect_ratio": "9:16",
+            },
+        )
+        assert refined.status_code == 200
+        asset = refined.json()
+        assert asset["status"] == "completed"
+        assert asset["slot_index"] == 1
+        assert "28岁欧美金发美女" in asset["prompt_used"]
+
+
+
 
 

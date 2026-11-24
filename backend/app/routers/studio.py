@@ -41,6 +41,8 @@ from ..schemas import (
     GeneratedAssetOut,
     LockPlanRequest,
     ProductDNA,
+    RefineImageRequest,
+    RefinedImagePromptResponse,
     RevisePlanRequest,
     StitchFinalVideoRequest,
     StudioStateOut,
@@ -63,7 +65,7 @@ from ..services.media_generator import (
     generate_product_image,
 )
 from ..services.product_parser import _resize_jpeg
-from ..services.prompts import build_director_revision_prompt
+from ..services.prompts import build_director_revision_prompt, build_image_refinement_prompt
 from ..services.video_processor import is_ffmpeg_available
 from ..services.video_stitcher import stitch_media_items_to_mp4
 
@@ -192,7 +194,9 @@ def _serialize_asset(asset: GeneratedAsset) -> GeneratedAssetOut:
     )
 
 
-def _extract_product_ref_images(session: ScanSession) -> tuple[list[tuple[bytes, str]], str | None]:
+def _extract_product_ref_images(
+    session: ScanSession,
+) -> tuple[list[tuple[bytes, str]], str | None]:
     refs: list[tuple[bytes, str]] = []
     preview: str | None = None
     for asset in session.product_assets or []:
@@ -204,9 +208,22 @@ def _extract_product_ref_images(session: ScanSession) -> tuple[list[tuple[bytes,
         decoded = decode_data_url_image(raw_url)
         if decoded:
             refs.append(decoded)
-            if len(refs) >= 2:
+            if len(refs) >= 5:
                 break
     return refs, preview
+
+
+def _extract_product_ref_previews(session: ScanSession) -> list[str]:
+    previews: list[str] = []
+    for asset in session.product_assets or []:
+        if not isinstance(asset, dict):
+            continue
+        raw_url = asset.get("thumbnail") or asset.get("reference_image")
+        if isinstance(raw_url, str) and raw_url.startswith("data:image/"):
+            previews.append(raw_url)
+            if len(previews) >= 5:
+                break
+    return previews
 
 
 def _get_video_and_session(db: Session, video_id: str) -> tuple[VideoRecord, ScanSession]:
@@ -463,6 +480,7 @@ def get_studio_state(
         product_name=session.product_name,
         has_product_reference=bool(refs),
         product_reference_preview=preview,
+        product_reference_previews=_extract_product_ref_previews(session),
         default_image_provider=cfg.default_image_provider,
         gemini_image_configured=cfg.gemini_image_configured(),
         openai_image_configured=cfg.openai_image_configured(),
@@ -582,7 +600,9 @@ async def _prepare_shot_image_inputs(
     prompt_additions: list[str] = []
 
     if include_product and product_refs:
-        final_refs.append(product_refs[0])
+        # Attach up to 3 multi-angle product reference images so generated frames preserve
+        # front/side/detail fidelity faithfully.
+        final_refs.extend(product_refs[:3])
 
     if has_person:
         if char_en and char_en[:24].lower() not in prompt.lower():
@@ -746,9 +766,8 @@ async def revise_director_plan(
             prompt=rev_prompt,
             schema_cls=DirectorRevisionResponse,
             tier="deep",
-            # Pass user's actual uploaded product photo so AI sees exact color, curves,
-            # stitching, texture, cushions, and excludes any background clutter!
-            images=product_refs[:1],
+            # Pass up to 4 multi-angle uploaded product photos so AI sees front/side/detail angles!
+            images=product_refs[:4],
             mock_context={
                 "current_analysis": curr_analysis,
                 "user_feedback": feedback,
@@ -797,6 +816,8 @@ async def revise_director_plan(
         updated_plan["current_master_prompt_cn"] = rev_res.current_master_prompt_cn.strip()
     if rev_res.current_master_prompt_en.strip():
         updated_plan["current_master_prompt_en"] = rev_res.current_master_prompt_en.strip()
+    if rev_res.negative_constraints.strip():
+        updated_plan["negative_constraints"] = rev_res.negative_constraints.strip()
     if rev_res.ai_character_profile_cn.strip():
         updated_plan["ai_character_profile_cn"] = rev_res.ai_character_profile_cn.strip()
     if rev_res.ai_character_profile_en.strip():
@@ -866,6 +887,126 @@ def lock_director_plan(
         "revision_status": plan["revision_status"],
         "analysis_json": video.analysis_json,
     }
+
+
+@router.post("/videos/{video_id}/refine-image", response_model=GeneratedAssetOut)
+async def refine_single_image(
+    video_id: str,
+    body: RefineImageRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> GeneratedAssetOut:
+    """Apply a user's Chinese visual correction (e.g. '换更年轻的欧美金发贵妇', '光线调亮', '沙发放大')
+    to a specific generated frame's prompt and immediately re-generate ONLY that single image."""
+    feedback = body.feedback.strip()
+    if not feedback:
+        raise HTTPException(status_code=400, detail="请填写你对这张图的修改意见")
+
+    cfg = get_settings()
+    video, session = _get_video_and_session(db, video_id)
+    provider = body.provider or cfg.default_image_provider
+    if provider == "gemini" and not cfg.gemini_image_configured():
+        raise HTTPException(status_code=400, detail="尚未配置 GEMINI_API_KEY")
+    if provider == "openai" and not cfg.openai_image_configured():
+        raise HTTPException(
+            status_code=400, detail="尚未配置 OPENAI_IMAGE_API_KEY 或 OPENAI_API_KEY"
+        )
+
+    analysis = dict(video.analysis_json or {})
+    plan = dict(analysis.get("director_plan") or {})
+    dna = session.product_dna or {}
+    pname = str(dna.get("product_name") or session.product_name or "产品")
+    pform = str(dna.get("physical_form") or "")
+    char_en = str(plan.get("ai_character_profile_en") or "")
+
+    # Determine base prompt from request or stored slot prompt
+    base_prompt = body.base_prompt.strip()
+    img_prompts = list(analysis.get("chatgpt_images_prompts") or [])
+    if not base_prompt and 0 <= body.slot_index < len(img_prompts):
+        base_prompt = str(
+            img_prompts[body.slot_index].get("prompt_en")
+            or img_prompts[body.slot_index].get("prompt_cn")
+            or ""
+        )
+
+    ai = UnifiedAIClient(cfg)
+    refine_prompt = build_image_refinement_prompt(
+        product_name=pname,
+        product_form=pform,
+        base_prompt=base_prompt,
+        user_feedback=feedback,
+        character_profile_en=char_en,
+    )
+    try:
+        refined, _usage = await ai.generate_structured(
+            prompt=refine_prompt,
+            schema_cls=RefinedImagePromptResponse,
+            tier="fast",
+            mock_context={"base_prompt": base_prompt, "feedback": feedback},
+        )
+        new_prompt_en = refined.refined_prompt_en.strip() or f"{base_prompt}. User fix: {feedback}"
+        new_prompt_cn = refined.refined_prompt_cn.strip()
+    except Exception as exc:
+        logger.warning("Image prompt refinement fallback for slot %s: %s", body.slot_index, exc)
+        new_prompt_en = f"{base_prompt}\nCRITICAL USER VISUAL FIX: {feedback}."
+        new_prompt_cn = feedback
+
+    # Persist refined prompt into the slot so subsequent regenerations keep the fix
+    if 0 <= body.slot_index < len(img_prompts) and isinstance(img_prompts[body.slot_index], dict):
+        slot_dict = dict(img_prompts[body.slot_index])
+        slot_dict["prompt_en"] = new_prompt_en
+        if new_prompt_cn:
+            slot_dict["prompt_cn"] = new_prompt_cn
+        img_prompts[body.slot_index] = slot_dict
+        analysis["chatgpt_images_prompts"] = img_prompts
+        video.analysis_json = analysis
+        flag_modified(video, "analysis_json")
+        db.commit()
+
+    product_refs, _ = _extract_product_ref_images(session)
+    # If user explicitly asked to change the person/character on this image, don't force old character ref!
+    changing_person = any(
+        k in feedback for k in ("人物", "长相", "脸", "发型", "年龄", "贵妇", "女生", "男生", "换成", "换人", "模特")
+    )
+    final_prompt, final_refs = await _prepare_shot_image_inputs(
+        video=video,
+        session=session,
+        db=db,
+        slot_index=body.slot_index,
+        shot_no=body.shot_no,
+        prompt=new_prompt_en,
+        product_refs=product_refs,
+        use_character_ref=body.use_character_ref and not changing_person,
+    )
+
+    asset = GeneratedAsset(
+        video_id=video.id,
+        session_id=session.id,
+        asset_type="image",
+        slot_index=body.slot_index,
+        shot_no=body.shot_no,
+        scene_title=body.scene_title or f"画面 {body.slot_index}",
+        provider=provider,
+        model_name=body.model_override
+        or (cfg.gemini_image_model if provider == "gemini" else cfg.openai_image_model),
+        status="processing",
+        prompt_used=final_prompt,
+    )
+    db.add(asset)
+    db.commit()
+    db.refresh(asset)
+
+    await _run_image_job(
+        asset_id=asset.id,
+        prompt=final_prompt,
+        ref_images=final_refs,
+        provider=provider,
+        model_override=body.model_override,
+        aspect_ratio=body.aspect_ratio,
+        scene_title=asset.scene_title,
+        product_name=session.product_name,
+    )
+    db.refresh(asset)
+    return _serialize_asset(asset)
 
 
 @router.post("/videos/{video_id}/generate-image", response_model=GeneratedAssetOut)
