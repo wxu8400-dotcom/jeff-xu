@@ -1,0 +1,249 @@
+from __future__ import annotations
+
+import asyncio
+import io
+import time
+
+from PIL import Image
+
+from app.database import get_session_factory
+from app.models import GeneratedAsset, ScanSession, VideoRecord
+from app.routers.studio import _prepare_shot_image_inputs, _save_asset_media
+
+
+def _make_sample_jpg(color: tuple[int, int, int] = (230, 240, 250)) -> bytes:
+    img = Image.new("RGB", (320, 320), color)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=85)
+    return buf.getvalue()
+
+
+def _wait_scan_done(client, session_id: str, timeout: float = 10.0) -> dict:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        detail = client.get(f"/api/scans/{session_id}").json()
+        if detail["status"] in ("completed", "failed"):
+            return detail
+        time.sleep(0.1)
+    raise AssertionError("Scan did not complete in time")
+
+
+def test_director_co_creation_revise_and_lock_lifecycle(make_client):
+    with make_client(password="", mock_mode=True) as client:
+        resp = client.post(
+            "/api/scans",
+            data={
+                "product_name_override": "磁吸桌面氛围灯",
+                "product_text": "极简设计、USB-C充电、三档调光，适合书桌卧室使用。",
+                "platforms": '["tiktok"]',
+                "target_count": "1",
+                "min_views": "10000",
+                "min_likes": "500",
+                "date_range_days": "30",
+            },
+            files=[("files", ("lamp.jpg", _make_sample_jpg(), "image/jpeg"))],
+        )
+        assert resp.status_code == 200
+        session_id = resp.json()["session_id"]
+        detail = _wait_scan_done(client, session_id)
+        assert detail["status"] == "completed"
+        assert len(detail["videos"]) >= 1
+
+        video = detail["videos"][0]
+        video_id = video["id"]
+        analysis = video["analysis_json"]
+        plan = analysis["director_plan"]
+        assert plan["revision_status"] == "draft"
+        assert plan["original_plot_summary"]
+        assert plan["ai_character_profile_cn"]
+        assert plan["ai_character_profile_en"]
+        assert any(s.get("replication_action") == "keep_scene" for s in analysis["storyboard"])
+        assert any(s.get("has_person") for s in analysis["storyboard"])
+
+        # Round 1: User gives director feedback to tweak character & product placement
+        rev_resp = client.post(
+            f"/api/studio/videos/{video_id}/revise-plan",
+            json={"feedback": "把AI人物换成年轻女性，第2镜再自然引出产品"},
+        )
+        assert rev_resp.status_code == 200
+        rev_data = rev_resp.json()
+        assert rev_data["ok"] is True
+        assert rev_data["director_reply"]
+        updated_plan = rev_data["analysis_json"]["director_plan"]
+        assert updated_plan["revision_status"] == "draft"
+        assert len(updated_plan["revision_history"]) == 2
+        assert updated_plan["revision_history"][0]["role"] == "user"
+        assert "年轻女性" in updated_plan["revision_history"][0]["message"]
+        assert updated_plan["revision_history"][1]["role"] == "director"
+
+        # Verify persisted in scan detail reload
+        reloaded = client.get(f"/api/scans/{session_id}").json()
+        reloaded_video = next(v for v in reloaded["videos"] if v["id"] == video_id)
+        assert len(reloaded_video["analysis_json"]["director_plan"]["revision_history"]) == 2
+
+        # Lock the finalized storyboard plan
+        lock_resp = client.post(
+            f"/api/studio/videos/{video_id}/lock-plan",
+            json={"locked": True},
+        )
+        assert lock_resp.status_code == 200
+        assert lock_resp.json()["revision_status"] == "locked"
+
+        # Unlock back to draft
+        unlock_resp = client.post(
+            f"/api/studio/videos/{video_id}/lock-plan",
+            json={"locked": False},
+        )
+        assert unlock_resp.status_code == 200
+        assert unlock_resp.json()["revision_status"] == "draft"
+
+
+def test_smart_reference_passing_respects_keep_scene_and_character_consistency(make_client):
+    with make_client(password="", mock_mode=True) as client:
+        resp = client.post(
+            "/api/scans",
+            data={
+                "product_name_override": "便携香薰机",
+                "product_text": "极简磨砂质感，静音出雾。",
+                "platforms": '["tiktok"]',
+                "target_count": "1",
+                "min_views": "10000",
+                "min_likes": "500",
+                "date_range_days": "30",
+            },
+            files=[("files", ("diffuser.jpg", _make_sample_jpg((100, 120, 140)), "image/jpeg"))],
+        )
+        assert resp.status_code == 200
+        detail = _wait_scan_done(client, resp.json()["session_id"])
+        video_id = detail["videos"][0]["id"]
+
+        factory = get_session_factory()
+        db = factory()
+        try:
+            video = db.get(VideoRecord, video_id)
+            session = db.get(ScanSession, video.session_id)
+            assert video is not None and session is not None
+
+            # Force deterministic shot flags for testing
+            analysis = dict(video.analysis_json or {})
+            analysis["director_plan"] = {
+                **(analysis.get("director_plan") or {}),
+                "ai_character_profile_en": "A cheerful 26-year-old East Asian woman with shoulder-length black hair wearing a beige knit sweater",
+            }
+            analysis["storyboard"] = [
+                {
+                    "shot_no": 1,
+                    "time_range": "0-3s",
+                    "shot_size": "中景",
+                    "camera_movement": "固定",
+                    "original_visual": "人物走进客厅",
+                    "adapted_visual_for_product": "新AI人物走进客厅，先铺垫情绪，暂不出现产品",
+                    "replication_action": "keep_scene",
+                    "has_person": True,
+                },
+                {
+                    "shot_no": 2,
+                    "time_range": "3-7s",
+                    "shot_size": "特写",
+                    "camera_movement": "慢推",
+                    "original_visual": "拿起桌面物品",
+                    "adapted_visual_for_product": "同一AI人物拿起便携香薰机",
+                    "replication_action": "insert_product",
+                    "has_person": True,
+                },
+            ]
+            video.analysis_json = analysis
+            db.commit()
+
+            product_bytes = _make_sample_jpg((255, 0, 0))
+            product_refs = [(product_bytes, "image/jpeg")]
+
+            # 1) Shot 1 (keep_scene + has_person): NO product ref attached, AI character profile injected!
+            p1, refs1 = asyncio.run(
+                _prepare_shot_image_inputs(
+                    video=video,
+                    session=session,
+                    db=db,
+                    slot_index=1,
+                    shot_no=1,
+                    prompt="A cozy modern living room opening scene",
+                    product_refs=product_refs,
+                    use_character_ref=True,
+                )
+            )
+            assert len(refs1) == 0
+            assert "26-year-old East Asian woman" in p1
+
+            # Persist a completed generated image for Shot 1 (acts as character anchor)
+            char_bytes = _make_sample_jpg((0, 200, 100))
+            shot1_asset = GeneratedAsset(
+                video_id=video.id,
+                session_id=session.id,
+                asset_type="image",
+                slot_index=1,
+                shot_no=1,
+                scene_title="分镜 1 首帧图",
+                provider="mock",
+                model_name="mock-img",
+                status="completed",
+                mime_type="image/jpeg",
+            )
+            db.add(shot1_asset)
+            db.commit()
+            db.refresh(shot1_asset)
+            _save_asset_media(shot1_asset, char_bytes)
+            db.commit()
+
+            # 2) Shot 2 (insert_product + has_person + use_character_ref=True):
+            # MUST attach BOTH product ref AND Shot 1 character ref!
+            p2, refs2 = asyncio.run(
+                _prepare_shot_image_inputs(
+                    video=video,
+                    session=session,
+                    db=db,
+                    slot_index=2,
+                    shot_no=2,
+                    prompt="Holding the diffuser on the wooden desk",
+                    product_refs=product_refs,
+                    use_character_ref=True,
+                )
+            )
+            assert len(refs2) == 2
+            assert refs2[0][0] == product_bytes
+            assert refs2[1][0] == char_bytes
+            assert "CRITICAL CHARACTER CONSISTENCY" in p2
+
+            # 3) Shot 2 with use_character_ref=False: ONLY product ref attached
+            p2_nochar, refs2_nochar = asyncio.run(
+                _prepare_shot_image_inputs(
+                    video=video,
+                    session=session,
+                    db=db,
+                    slot_index=2,
+                    shot_no=2,
+                    prompt="Holding the diffuser on the wooden desk",
+                    product_refs=product_refs,
+                    use_character_ref=False,
+                )
+            )
+            assert len(refs2_nochar) == 1
+            assert refs2_nochar[0][0] == product_bytes
+            assert "CRITICAL CHARACTER CONSISTENCY" not in p2_nochar
+
+            # 4) Poster (slot 0): always attaches product ref
+            _, refs0 = asyncio.run(
+                _prepare_shot_image_inputs(
+                    video=video,
+                    session=session,
+                    db=db,
+                    slot_index=0,
+                    shot_no=None,
+                    prompt="Hero commercial poster",
+                    product_refs=product_refs,
+                    use_character_ref=True,
+                )
+            )
+            assert len(refs0) == 1
+            assert refs0[0][0] == product_bytes
+        finally:
+            db.close()

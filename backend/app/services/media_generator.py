@@ -211,12 +211,18 @@ async def _generate_image_gemini(
 
     client = _build_gemini_image_client(cfg)
 
-    full_prompt = (
-        f"Generate a single photorealistic commercial image in vertical {aspect_ratio} aspect ratio. "
-        f"CRITICAL: Keep the exact product shown in the attached reference image(s) 100% faithful in shape, "
-        f"color, material, proportions, and surface details. Do NOT distort or replace the product design.\n\n"
-        f"{prompt}"
-    )
+    if ref_images:
+        full_prompt = (
+            f"Generate a single photorealistic commercial image in vertical {aspect_ratio} aspect ratio. "
+            f"CRITICAL: Faithfully preserve the exact visual details from the attached reference image(s) "
+            f"as instructed below without unwanted distortion.\n\n"
+            f"{prompt}"
+        )
+    else:
+        full_prompt = (
+            f"Generate a single photorealistic commercial image in vertical {aspect_ratio} aspect ratio.\n\n"
+            f"{prompt}"
+        )
 
     parts: list[Any] = []
     for img_bytes, mime in ref_images[:2]:

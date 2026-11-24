@@ -14,6 +14,8 @@ from ..config import Settings, get_settings
 from ..schemas import (
     ChatGPTImagePrompt,
     CopywritingAnalysis,
+    DirectorPlan,
+    DirectorRevisionResponse,
     KlingVideoPrompt,
     PreliminaryScreeningBatch,
     PreliminaryScreeningItem,
@@ -429,6 +431,18 @@ class UnifiedAIClient:
                     if is_ai
                     else "自然手持微抖与真实环境光反射明显，判断为实拍爆款；同时已为你附带实拍与 AI 双套复刻提示词"
                 ),
+                director_plan=DirectorPlan(
+                    original_plot_summary="原爆款共 4 镜：开场人物特写抛钩子 → 中段单手展示痛点与核心产品亮相 → 前后空间对比反差 → 结尾高级桌面特写定格转化。",
+                    ai_character_profile_cn="26 岁原创时尚女性创作者，深棕色微卷齐肩发、自然清透妆容，身穿米白色极简针织衫（全片统一人物，与原片真人完全不同）",
+                    ai_character_profile_en="An original stylish 26-year-old woman with shoulder-length wavy dark brown hair, natural makeup, wearing a minimalist cream knit top",
+                    product_placement_plan=f"建议 1:1 保留原片 4 镜情节与场景构图：第 1 镜保留开场视觉钩子（仅换原创 AI 人物），第 2 镜将原物品直接替换为【{pname}】核心亮相，第 3 镜适度微调背景强化前后对比，第 4 镜保留极简美学定格突出产品质感。",
+                    open_questions_for_user=[
+                        "当前为你设计的 26 岁米白穿搭原创 AI 女性形象是否满意，还是想换成男性或亚洲极简风？",
+                        f"【{pname}】安排在第 2 镜正式出场并保留第 1 镜悬念，你想保持原节奏还是第 1 镜就直接露出产品？",
+                    ],
+                    revision_status="draft",
+                    revision_history=[],
+                ),
                 replaceability=ReplaceabilityAnalysis(
                     score=93 if is_ai else 88,
                     original_featured_item=str(video_meta.get("original_featured_item") or "手持热门爆款单品"),
@@ -461,11 +475,14 @@ class UnifiedAIClient:
                         shot_size="极端特写",
                         camera_movement="快速前推并轻微上仰",
                         original_visual="原单品在强光下破雾而出，伴随清脆开启音效",
-                        adapted_visual_for_product=f"【{pname}】置于冷暖撞色光影台面中央，镜头快速推进聚焦其磨砂机身质感与核心功能细节，瞬间吸睛",
+                        adapted_visual_for_product=f"1:1 保留原片开场悬念场景，原创 AI 人物在冷暖撞色光影台面旁触发视觉钩子，镜头快速推进引出【{pname}】",
                         audio_sfx="清脆“咔哒”启动声 + 低频重音卡点",
                         production_mode="ai",
                         real_shoot_guide=f"若改为实拍：将【{pname}】摆在深色桌面上，手机开 2x 焦段从 35cm 匀速前推至 12cm，拍 3 秒。",
                         spoken_line="别划走！3秒让你看懂什么叫降维打击！",
+                        replication_action="keep_scene",
+                        director_advice="1:1 保留原片开场悬念构图与运镜，仅将原片人物换成统一的原创 AI 形象，先抓完播率。",
+                        has_person=True,
                     ),
                     StoryboardShot(
                         shot_no=2,
@@ -473,11 +490,14 @@ class UnifiedAIClient:
                         shot_size="近景手持",
                         camera_movement="平稳跟随横移",
                         original_visual="单手握持演示核心功能，画面干净无杂物",
-                        adapted_visual_for_product=f"一只干净自然的手稳稳握持【{pname}】在日常高频场景中启动演示，直观呈现「{dna.core_selling_points[0] if dna.core_selling_points else '核心卖点'}」",
+                        adapted_visual_for_product=f"同一位原创 AI 人物自然握持/展示【{pname}】，在原片同款干净场景中直观呈现「{dna.core_selling_points[0] if dna.core_selling_points else '核心卖点'}」",
                         audio_sfx="节奏感轻快英文/电子鼓点 BGM 切入",
                         production_mode="real_shoot",
                         real_shoot_guide=f"📱 手机竖屏固定在桌面支架或单手握持，45° 侧自然光，真实单手拿起【{pname}】按下开关并展示效果，拍 5~6 秒即可。",
                         spoken_line=f"每天最烦人的痛点，用这个【{pname}】一按直接搞定。",
+                        replication_action="insert_product",
+                        director_advice=f"本镜为最佳产品替换槽位：1:1 沿用原片近景演示动作，把原物品无缝替换成【{pname}】。",
+                        has_person=True,
                     ),
                     StoryboardShot(
                         shot_no=3,
@@ -485,11 +505,14 @@ class UnifiedAIClient:
                         shot_size="中景分屏/对比",
                         camera_movement="固定机位微推",
                         original_visual="使用前烦躁痛点 vs 使用后轻松愉悦的强反差",
-                        adapted_visual_for_product=f"对比展示没有【{pname}】时的困扰，切到使用【{pname}】后的清爽高效状态，突出便携与高颜值属性",
+                        adapted_visual_for_product=f"沿用原片前后反差结构，对比没有【{pname}】与使用【{pname}】后的清爽高级状态",
                         audio_sfx="转场“嗖”音效 + 人声高潮金句",
                         production_mode="real_shoot",
                         real_shoot_guide=f"📱 同一个机位固定不动拍两段各 3 秒：先拍没放【{pname}】的普通画面，再把【{pname}】放上去并点亮/启动，剪辑一秒硬切反差拉满。",
                         spoken_line="前后对比太离谱了，难怪全网都在抢！",
+                        replication_action="rewrite_scene",
+                        director_advice=f"保留原片对比转场节奏，但将背景道具微调为更契合【{pname}】的真实使用场景以提升说服力。",
+                        has_person=False,
                     ),
                     StoryboardShot(
                         shot_no=4,
@@ -497,11 +520,14 @@ class UnifiedAIClient:
                         shot_size="特写定格",
                         camera_movement="缓慢环绕 30 度",
                         original_visual="产品精致摆放，四周虚化光斑收尾",
-                        adapted_visual_for_product=f"【{pname}】精致陈列在桌面美学场景中，柔光勾勒轮廓，背景呈现高级奶油虚化光斑，预留底部字幕与行动引导区",
+                        adapted_visual_for_product=f"1:1 复刻原片收尾环绕构图，【{pname}】精致陈列在桌面美学场景中，柔光勾勒轮廓，预留字幕引导区",
                         audio_sfx="BGM 干净收尾 + 轻柔提示音",
                         production_mode="ai",
                         real_shoot_guide=f"若改为实拍：将【{pname}】放在窗边桌面，手机缓慢向右弧形绕拍 30 度，拍 4 秒定格。",
                         spoken_line="想要同款直接看下方，用过一次真的回不去。",
+                        replication_action="insert_product",
+                        director_advice=f"1:1 复刻原片结尾电影级环绕定格，把原单品替换为【{pname}】强化品牌记忆与转化。",
+                        has_person=False,
                     ),
                 ],
                 shooting_requirements=ShootingRequirements(
@@ -601,5 +627,32 @@ class UnifiedAIClient:
                 ],
             )
             return analysis, TokenUsage(input_tokens=11800, output_tokens=2100)  # type: ignore[return-value]
+
+        if schema_cls is DirectorRevisionResponse:
+            current_raw = ctx.get("current_analysis") or {}
+            feedback = str(ctx.get("user_feedback") or "").strip()
+            updated = VideoDeepAnalysis.model_validate(current_raw)
+            if updated.storyboard:
+                updated.storyboard[0].adapted_visual_for_product = (
+                    f"{updated.storyboard[0].adapted_visual_for_product}（已按你的意见调整：{feedback}）"
+                )
+                updated.storyboard[0].director_advice = f"已根据你的最新反馈「{feedback}」同步更新本镜与提示词"
+            if any(k in feedback for k in ("人物", "女生", "男生", "亚洲", "穿搭", "换角")):
+                updated.director_plan.ai_character_profile_cn = f"已按你要求更新的原创 AI 人物：{feedback}"
+                updated.director_plan.ai_character_profile_en = (
+                    f"Updated original AI character matching user direction: {feedback}"
+                )
+            if updated.chatgpt_images_prompts:
+                updated.chatgpt_images_prompts[0].prompt_en = (
+                    f"{updated.chatgpt_images_prompts[0].prompt_en} [Director revision applied: {feedback}]"
+                )
+            return (
+                DirectorRevisionResponse(
+                    director_reply=f"明白！已按你的意见「{feedback}」同步更新了分镜方案、AI 人物设定以及对应的生图/可灵提示词。你可以检查一下，如果满意就可以点击「确认定稿」开始按步骤出片啦！",
+                    changed_shots=[1],
+                    analysis=updated,
+                ),
+                TokenUsage(input_tokens=3200, output_tokens=1800),
+            )  # type: ignore[return-value]
 
         raise ValueError(f"Unsupported mock schema: {schema_cls}")

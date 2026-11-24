@@ -19,13 +19,19 @@ import { StudioWorkbench } from "./StudioWorkbench";
 
 interface Props {
   video: VideoRecord;
+  onVideoUpdated?: (updated: VideoRecord) => void;
   onClose: () => void;
   onToast: (msg: string) => void;
 }
 
 type TabKey = "studio" | "prompts" | "overview" | "storyboard" | "shooting" | "copywriting";
 
-export const VideoDetailModal: React.FC<Props> = ({ video, onClose, onToast }) => {
+export const VideoDetailModal: React.FC<Props> = ({
+  video,
+  onVideoUpdated,
+  onClose,
+  onToast,
+}) => {
   const [tab, setTab] = useState<TabKey>("studio");
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const a = video.analysis_json;
@@ -124,7 +130,18 @@ export const VideoDetailModal: React.FC<Props> = ({ video, onClose, onToast }) =
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-5">
-          {tab === "studio" && <StudioWorkbench video={video} onToast={onToast} />}
+          {tab === "studio" && (
+            <StudioWorkbench
+              video={video}
+              onAnalysisUpdated={(next) =>
+                onVideoUpdated?.({
+                  ...video,
+                  analysis_json: next,
+                })
+              }
+              onToast={onToast}
+            />
+          )}
 
           {tab === "prompts" && (
             <>

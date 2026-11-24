@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertTriangle,
   Bot,
   Camera,
   CheckCircle2,
@@ -13,15 +14,24 @@ import {
   Sparkles,
   Trash2,
   Upload,
+  UserRound,
   Volume2,
   Wand2,
   X,
 } from "lucide-react";
 import { api } from "../api/client";
-import type { GeneratedAsset, StoryboardShot, StudioState, VideoRecord } from "../types/radar";
+import type {
+  GeneratedAsset,
+  StoryboardShot,
+  StudioState,
+  VideoDeepAnalysis,
+  VideoRecord,
+} from "../types/radar";
+import { DirectorCoCreatePanel } from "./DirectorCoCreatePanel";
 
 interface Props {
   video: VideoRecord;
+  onAnalysisUpdated?: (next: VideoDeepAnalysis) => void;
   onToast: (msg: string) => void;
 }
 
@@ -36,7 +46,7 @@ function inferDefaultShotMode(shot: StoryboardShot, isAiVideo: boolean): "ai" | 
   return "ai";
 }
 
-export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
+export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onToast }) => {
   const [studio, setStudio] = useState<StudioState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -46,6 +56,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
   const [shotModeOverrides, setShotModeOverrides] = useState<Record<number, "ai" | "real_shoot">>({});
   const [imageProvider, setImageProvider] = useState<"gemini" | "openai">("gemini");
   const [openaiModel, setOpenaiModel] = useState<string>("seedream-4.5");
+  const [useCharacterRef, setUseCharacterRef] = useState<boolean>(true);
   const [klingModel, setKlingModel] = useState<string>("kling-v2-5-turbo");
   const [enableKlingSound, setEnableKlingSound] = useState<boolean>(false);
 
@@ -195,6 +206,22 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
     };
   };
 
+  const handleAnalysisUpdated = useCallback(
+    (next: VideoDeepAnalysis) => {
+      onAnalysisUpdated?.(next);
+      setEditedPrompts({});
+      const copy = next.copywriting;
+      if (copy) {
+        if (voiceoverVoice.startsWith("en-") && copy.adapted_script_en) {
+          setVoiceoverText(copy.adapted_script_en);
+        } else if (copy.adapted_script_cn) {
+          setVoiceoverText(copy.adapted_script_cn);
+        }
+      }
+    },
+    [onAnalysisUpdated, voiceoverVoice]
+  );
+
   const handleUploadProductRef = async (file: File) => {
     try {
       await api.uploadProductReference(video.id, file);
@@ -218,6 +245,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
         provider: imageProvider,
         model_override: imageProvider === "openai" ? openaiModel : "",
         aspect_ratio: info.ratio,
+        use_character_ref: useCharacterRef,
       });
       onToast(`已生成：${info.title}`);
       await loadState(true);
@@ -237,6 +265,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
         only_missing: true,
         include_real_shoot_shots: globalMode === "all_ai",
         include_poster: true,
+        use_character_ref: useCharacterRef,
       });
       if (created.length === 0) {
         onToast("当前所有需要的分镜商品图均已生成完毕！");
@@ -427,9 +456,17 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
   }).length;
 
   const posterAsset = latestImageBySlot[0];
+  const isDirectorLocked = a?.director_plan?.revision_status === "locked";
 
   return (
     <div className="space-y-5">
+      {/* Step 0: AI Director 1:1 Co-Creation & Confirmation Panel */}
+      <DirectorCoCreatePanel
+        video={video}
+        onAnalysisUpdated={handleAnalysisUpdated}
+        onToast={onToast}
+      />
+
       {/* Top Control Header */}
       <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -603,6 +640,16 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
                 ))}
               </div>
             )}
+            <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-300 pt-1 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={useCharacterRef}
+                onChange={(e) => setUseCharacterRef(e.target.checked)}
+                className="rounded border-slate-600 bg-slate-950 text-sky-500"
+              />
+              <UserRound className="w-3.5 h-3.5 text-sky-400" />
+              跨镜头 AI 人物一致（含人物分镜自动锁脸/引用首张人物图，非产品铺垫镜不强塞商品）
+            </label>
           </div>
         </div>
 
@@ -703,6 +750,14 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
 
         {/* One-Click Batch Action Bar */}
         <div className="space-y-2.5 pt-2 border-t border-slate-800/80">
+          {!isDirectorLocked && (
+            <div className="flex items-start gap-2 rounded-xl bg-amber-500/10 border border-amber-500/30 px-3 py-2 text-[11px] text-amber-200 leading-relaxed">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <span>
+                <b>温馨提示：</b>你尚未在上方「步骤 0：AI 导演 1:1 复刻分镜共创」点击<b>「✅ 确认分镜定稿」</b>。建议先和 AI 导演聊好哪个分镜放产品、换什么 AI 人物，确认定稿后再花钱点下方 1 → 2 → 3 生成图片和视频（当然你也可以直接生成）。
+              </span>
+            </div>
+          )}
           {studio.kling_configured && (
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-[11px] text-slate-400">可灵视频模型：</span>
@@ -948,6 +1003,24 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
                   <span className="px-2 py-0.5 rounded bg-slate-800 text-slate-300 text-[11px]">
                     {shot.shot_size} · {shot.camera_movement}
                   </span>
+                  {shot.replication_action === "keep_scene" ? (
+                    <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-600 text-slate-200 text-[11px]">
+                      🔒 原样复刻（不强塞产品）
+                    </span>
+                  ) : shot.replication_action === "rewrite_scene" ? (
+                    <span className="px-2 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-200 text-[11px]">
+                      ✏️ 适度改写场景
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 text-[11px]">
+                      🔄 植入你的产品
+                    </span>
+                  )}
+                  {shot.has_person && (
+                    <span className="px-2 py-0.5 rounded bg-sky-500/15 border border-sky-500/30 text-sky-200 text-[11px]">
+                      👤 AI 人物替换
+                    </span>
+                  )}
                 </div>
 
                 {/* Per-Shot Mode Toggle */}
@@ -983,10 +1056,18 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
                 </div>
               </div>
 
-              <p className="text-xs text-slate-200 leading-relaxed bg-slate-900/70 rounded-xl px-3 py-2">
-                <span className="text-emerald-300 font-semibold">本镜画面：</span>
-                {shot.adapted_visual_for_product}
-              </p>
+              <div className="space-y-1.5">
+                <p className="text-xs text-slate-200 leading-relaxed bg-slate-900/70 rounded-xl px-3 py-2">
+                  <span className="text-emerald-300 font-semibold">本镜画面：</span>
+                  {shot.adapted_visual_for_product}
+                </p>
+                {shot.director_advice && (
+                  <p className="text-[11px] text-purple-200/90 leading-relaxed bg-purple-950/30 border border-purple-500/20 rounded-xl px-3 py-1.5">
+                    <span className="text-purple-300 font-semibold">🎬 导演建议：</span>
+                    {shot.director_advice}
+                  </p>
+                )}
+              </div>
 
               {mode === "ai" ? (
                 /* AI Mode: 2 Columns (Generated First-Frame Image | Generated Video Clip) */
@@ -996,7 +1077,9 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs font-semibold text-emerald-300 flex items-center gap-1">
                         <ImageIcon className="w-3.5 h-3.5" />
-                        步骤 A：AI 替换商品首帧图
+                        {shot.replication_action === "keep_scene"
+                          ? "步骤 A：AI 复刻场景首帧图"
+                          : "步骤 A：AI 替换商品首帧图"}
                       </span>
                       <div className="flex items-center gap-1.5">
                         <button

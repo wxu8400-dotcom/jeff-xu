@@ -65,6 +65,26 @@ export interface StoryboardShot {
   production_mode?: "ai" | "real_shoot" | string;
   real_shoot_guide?: string;
   spoken_line?: string;
+  replication_action?: "keep_scene" | "insert_product" | "rewrite_scene" | string;
+  director_advice?: string;
+  has_person?: boolean;
+}
+
+export interface DirectorRevisionMessage {
+  role: "user" | "director" | string;
+  message: string;
+  changed_shots?: number[];
+  timestamp?: string;
+}
+
+export interface DirectorPlan {
+  original_plot_summary?: string;
+  ai_character_profile_cn?: string;
+  ai_character_profile_en?: string;
+  product_placement_plan?: string;
+  open_questions_for_user?: string[];
+  revision_status?: "draft" | "locked" | string;
+  revision_history?: DirectorRevisionMessage[];
 }
 
 export interface ShootingRequirements {
@@ -105,6 +125,7 @@ export interface VideoDeepAnalysis {
   is_ai_generated: boolean;
   ai_confidence: number;
   ai_detection_reason: string;
+  director_plan?: DirectorPlan;
   replaceability: ReplaceabilityAnalysis;
   structure: VideoStructureAnalysis;
   storyboard: StoryboardShot[];

@@ -65,6 +65,20 @@ class StoryboardShot(BaseModel):
     production_mode: str = "ai"  # "ai" | "real_shoot"
     real_shoot_guide: str = ""
     spoken_line: str = ""
+    # V2.1 1:1 Faithful Replication & Director Co-creation fields
+    replication_action: str = "insert_product"  # "keep_scene" | "insert_product" | "rewrite_scene"
+    director_advice: str = ""
+    has_person: bool = False
+
+
+class DirectorPlan(BaseModel):
+    original_plot_summary: str = ""
+    ai_character_profile_cn: str = ""
+    ai_character_profile_en: str = ""
+    product_placement_plan: str = ""
+    open_questions_for_user: list[str] = Field(default_factory=list)
+    revision_status: str = "draft"  # "draft" | "locked"
+    revision_history: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ShootingRequirements(BaseModel):
@@ -107,6 +121,7 @@ class VideoDeepAnalysis(BaseModel):
     is_ai_generated: bool = False
     ai_confidence: int = Field(ge=0, le=100, default=70)
     ai_detection_reason: str = ""
+    director_plan: DirectorPlan = Field(default_factory=DirectorPlan)
     replaceability: ReplaceabilityAnalysis = Field(
         default_factory=ReplaceabilityAnalysis
     )
@@ -118,6 +133,12 @@ class VideoDeepAnalysis(BaseModel):
     copywriting: CopywritingAnalysis = Field(default_factory=CopywritingAnalysis)
     chatgpt_images_prompts: list[ChatGPTImagePrompt] = Field(default_factory=list)
     kling_prompts: list[KlingVideoPrompt] = Field(default_factory=list)
+
+
+class DirectorRevisionResponse(BaseModel):
+    director_reply: str = ""
+    changed_shots: list[int] = Field(default_factory=list)
+    analysis: VideoDeepAnalysis
 
 
 class VideoRecordOut(BaseModel):
@@ -268,6 +289,7 @@ class GenerateImageRequest(BaseModel):
     provider: Literal["gemini", "openai"] | None = None
     model_override: str = ""
     aspect_ratio: str = "9:16"
+    use_character_ref: bool = True
 
 
 class GenerateAllImagesRequest(BaseModel):
@@ -276,6 +298,15 @@ class GenerateAllImagesRequest(BaseModel):
     only_missing: bool = True
     include_real_shoot_shots: bool = True
     include_poster: bool = True
+    use_character_ref: bool = True
+
+
+class RevisePlanRequest(BaseModel):
+    feedback: str
+
+
+class LockPlanRequest(BaseModel):
+    locked: bool = True
 
 
 class GenerateVideoClipRequest(BaseModel):

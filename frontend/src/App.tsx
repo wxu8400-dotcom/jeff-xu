@@ -495,6 +495,19 @@ export default function App() {
       {selectedVideo && (
         <VideoDetailModal
           video={selectedVideo}
+          onVideoUpdated={(updated) => {
+            setSelectedVideo(updated);
+            setActiveSession((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    videos: prev.videos.map((item) =>
+                      item.id === updated.id ? updated : item
+                    ),
+                  }
+                : prev
+            );
+          }}
           onClose={() => setSelectedVideo(null)}
           onToast={showToast}
         />

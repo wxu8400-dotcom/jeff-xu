@@ -6,6 +6,7 @@ import type {
   ScanSessionDetail,
   ScanSessionSummary,
   StudioState,
+  VideoDeepAnalysis,
 } from "../types/radar";
 
 async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
@@ -74,9 +75,32 @@ export const api = {
   exportUrl: (id: string, format: "md" | "json") =>
     `/api/scans/${encodeURIComponent(id)}/export?format=${format}`,
 
-  // V2.0 One-Click Replication Studio APIs
+  // V2.0 One-Click Replication Studio & V2.1 AI Director Co-Creation APIs
   getStudioState: (videoId: string) =>
     apiFetch<StudioState>(`/api/studio/videos/${encodeURIComponent(videoId)}/assets`),
+
+  reviseDirectorPlan: (videoId: string, feedback: string) =>
+    apiFetch<{
+      ok: boolean;
+      director_reply: string;
+      changed_shots: number[];
+      analysis_json: VideoDeepAnalysis;
+    }>(`/api/studio/videos/${encodeURIComponent(videoId)}/revise-plan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ feedback }),
+    }),
+
+  lockDirectorPlan: (videoId: string, locked: boolean) =>
+    apiFetch<{
+      ok: boolean;
+      revision_status: string;
+      analysis_json: VideoDeepAnalysis;
+    }>(`/api/studio/videos/${encodeURIComponent(videoId)}/lock-plan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ locked }),
+    }),
 
   uploadProductReference: (videoId: string, file: File) => {
     const fd = new FormData();
@@ -97,6 +121,7 @@ export const api = {
       provider: "gemini" | "openai";
       model_override?: string;
       aspect_ratio?: string;
+      use_character_ref?: boolean;
     }
   ) =>
     apiFetch<GeneratedAsset>(
@@ -116,6 +141,7 @@ export const api = {
       only_missing?: boolean;
       include_real_shoot_shots?: boolean;
       include_poster?: boolean;
+      use_character_ref?: boolean;
     }
   ) =>
     apiFetch<GeneratedAsset[]>(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import logging
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import quote
@@ -23,20 +24,26 @@ from fastapi import (
 from fastapi.responses import StreamingResponse
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session, defer
+from sqlalchemy.orm.attributes import flag_modified
 
 from ..auth import require_auth
 from ..config import DATA_DIR, get_settings
 from ..database import get_db, get_session_factory
 from ..models import GeneratedAsset, ScanSession, VideoRecord
 from ..schemas import (
+    DirectorRevisionResponse,
     GenerateAllImagesRequest,
     GenerateAllVideosRequest,
     GenerateImageRequest,
     GenerateVideoClipRequest,
     GeneratedAssetOut,
+    LockPlanRequest,
+    ProductDNA,
+    RevisePlanRequest,
     StitchFinalVideoRequest,
     StudioStateOut,
 )
+from ..services.ai_client import UnifiedAIClient
 from ..services.audio_engine import (
     generate_builtin_bgm_mp3,
     generate_tts_voiceover,
@@ -48,6 +55,7 @@ from ..services.media_generator import (
     generate_product_image,
 )
 from ..services.product_parser import _resize_jpeg
+from ..services.prompts import build_director_revision_prompt
 from ..services.video_processor import is_ffmpeg_available
 from ..services.video_stitcher import stitch_media_items_to_mp4
 
@@ -491,6 +499,204 @@ async def upload_product_reference_image(
     return {"ok": True, "video_id": video.id, "product_reference_preview": ref_url}
 
 
+CN_TZ = timezone(timedelta(hours=8))
+
+
+async def _find_character_reference_image(
+    video: VideoRecord,
+    db: Session,
+    *,
+    exclude_slot: int | None = None,
+) -> tuple[bytes, str] | None:
+    """Return the first completed generated image from an earlier person shot so
+    subsequent person shots keep the exact same original AI character face & outfit."""
+    analysis = video.analysis_json or {}
+    person_slots = [
+        int(s.get("shot_no") or idx)
+        for idx, s in enumerate(analysis.get("storyboard") or [], start=1)
+        if s.get("has_person") and int(s.get("shot_no") or idx) != exclude_slot
+    ]
+    if not person_slots:
+        return None
+    stmt = (
+        select(GeneratedAsset)
+        .options(defer(GeneratedAsset.file_data))
+        .where(
+            GeneratedAsset.video_id == video.id,
+            GeneratedAsset.asset_type == "image",
+            GeneratedAsset.status == "completed",
+            GeneratedAsset.slot_index.in_(person_slots),
+        )
+        .order_by(GeneratedAsset.slot_index.asc(), desc(GeneratedAsset.created_at))
+    )
+    row = db.scalars(stmt).first()
+    if not row:
+        return None
+    raw = await _load_asset_bytes(row, db)
+    if raw:
+        return raw, row.mime_type or "image/jpeg"
+    return None
+
+
+async def _prepare_shot_image_inputs(
+    *,
+    video: VideoRecord,
+    session: ScanSession,
+    db: Session,
+    slot_index: int,
+    shot_no: int | None,
+    prompt: str,
+    product_refs: list[tuple[bytes, str]],
+    use_character_ref: bool = True,
+) -> tuple[str, list[tuple[bytes, str]]]:
+    """Build exact prompt + reference image list respecting 1:1 plot continuity:
+    - Only attach product reference on Poster (slot 0) or shots where the product actually appears
+      (replication_action != 'keep_scene'). Pure plot-setup shots stay faithful without forced product!
+    - On shots with people (`has_person=True`), inject unified AI character profile and optionally
+      attach an earlier generated character frame to lock face & outfit consistency across shots.
+    """
+    analysis = video.analysis_json or {}
+    director_plan = analysis.get("director_plan") or {}
+    char_en = str(director_plan.get("ai_character_profile_en") or "").strip()
+
+    shot_obj: dict[str, Any] | None = None
+    if shot_no is not None:
+        for idx, s in enumerate(analysis.get("storyboard") or [], start=1):
+            if int(s.get("shot_no") or idx) == shot_no:
+                shot_obj = s
+                break
+
+    action = str((shot_obj or {}).get("replication_action") or "insert_product").lower()
+    has_person = bool((shot_obj or {}).get("has_person", False))
+    include_product = slot_index == 0 or action != "keep_scene"
+
+    final_refs: list[tuple[bytes, str]] = []
+    prompt_additions: list[str] = []
+
+    if include_product and product_refs:
+        final_refs.append(product_refs[0])
+
+    if has_person:
+        if char_en and char_en[:24].lower() not in prompt.lower():
+            prompt_additions.append(
+                f"Consistent original AI character (NOT copying any real person from the original video): {char_en}."
+            )
+        if use_character_ref:
+            char_ref = await _find_character_reference_image(
+                video, db, exclude_slot=slot_index
+            )
+            if char_ref:
+                final_refs.append(char_ref)
+                prompt_additions.append(
+                    "CRITICAL CHARACTER CONSISTENCY: Keep the exact same AI character's face, hairstyle, age, and outfit from the attached character reference image."
+                )
+
+    final_prompt = prompt.strip()
+    if prompt_additions:
+        final_prompt = " ".join(prompt_additions) + "\n\n" + final_prompt
+    return final_prompt, final_refs
+
+
+@router.post("/videos/{video_id}/revise-plan")
+async def revise_director_plan(
+    video_id: str,
+    body: RevisePlanRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> dict[str, Any]:
+    """Multi-turn AI Director co-creation: revise 1:1 storyboard, replacement AI character,
+    product placement, and synced image/Kling/voiceover prompts BEFORE spending image/video credits."""
+    feedback = body.feedback.strip()
+    if not feedback:
+        raise HTTPException(status_code=400, detail="请输入你想修改的意见或想法")
+
+    cfg = get_settings()
+    video, session = _get_video_and_session(db, video_id)
+    ai = UnifiedAIClient(cfg)
+
+    try:
+        dna = ProductDNA.model_validate(session.product_dna or {"product_name": session.product_name})
+    except Exception:
+        dna = ProductDNA(product_name=session.product_name)
+
+    curr_analysis = dict(video.analysis_json or {})
+    curr_plan = dict(curr_analysis.get("director_plan") or {})
+    history = list(curr_plan.get("revision_history") or [])
+
+    rev_prompt = build_director_revision_prompt(
+        product_dna=dna,
+        current_analysis=curr_analysis,
+        user_feedback=feedback,
+        revision_history=history,
+    )
+
+    try:
+        rev_res, _usage = await ai.generate_structured(
+            prompt=rev_prompt,
+            schema_cls=DirectorRevisionResponse,
+            tier="deep",
+            mock_context={
+                "current_analysis": curr_analysis,
+                "user_feedback": feedback,
+            },
+        )
+    except Exception as exc:
+        logger.exception("Director plan revision failed for video %s: %s", video_id, exc)
+        raise HTTPException(status_code=502, detail=f"AI 导演修改方案失败：{exc}") from exc
+
+    now_str = datetime.now(CN_TZ).strftime("%H:%M")
+    new_history = list(history)
+    new_history.append({"role": "user", "message": feedback, "timestamp": now_str})
+    new_history.append(
+        {
+            "role": "director",
+            "message": rev_res.director_reply,
+            "changed_shots": rev_res.changed_shots,
+            "timestamp": now_str,
+        }
+    )
+
+    updated_dict = rev_res.analysis.model_dump()
+    updated_plan = dict(updated_dict.get("director_plan") or {})
+    updated_plan["revision_status"] = "draft"
+    updated_plan["revision_history"] = new_history
+    updated_dict["director_plan"] = updated_plan
+
+    video.analysis_json = updated_dict
+    flag_modified(video, "analysis_json")
+    db.commit()
+    db.refresh(video)
+
+    return {
+        "ok": True,
+        "director_reply": rev_res.director_reply,
+        "changed_shots": rev_res.changed_shots,
+        "analysis_json": video.analysis_json,
+    }
+
+
+@router.post("/videos/{video_id}/lock-plan")
+def lock_director_plan(
+    video_id: str,
+    body: LockPlanRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> dict[str, Any]:
+    """Lock (or unlock) the co-created 1:1 storyboard plan before launching image/video generation."""
+    video, _session = _get_video_and_session(db, video_id)
+    analysis = dict(video.analysis_json or {})
+    plan = dict(analysis.get("director_plan") or {})
+    plan["revision_status"] = "locked" if body.locked else "draft"
+    analysis["director_plan"] = plan
+    video.analysis_json = analysis
+    flag_modified(video, "analysis_json")
+    db.commit()
+    db.refresh(video)
+    return {
+        "ok": True,
+        "revision_status": plan["revision_status"],
+        "analysis_json": video.analysis_json,
+    }
+
+
 @router.post("/videos/{video_id}/generate-image", response_model=GeneratedAssetOut)
 async def generate_single_image(
     video_id: str,
@@ -512,7 +718,17 @@ async def generate_single_image(
         body.model_override.strip()
         or (cfg.gemini_image_model if provider == "gemini" else cfg.openai_image_model)
     )
-    refs, _ = _extract_product_ref_images(session)
+    product_refs, _ = _extract_product_ref_images(session)
+    final_prompt, final_refs = await _prepare_shot_image_inputs(
+        video=video,
+        session=session,
+        db=db,
+        slot_index=body.slot_index,
+        shot_no=body.shot_no,
+        prompt=body.prompt,
+        product_refs=product_refs,
+        use_character_ref=body.use_character_ref,
+    )
     asset = GeneratedAsset(
         video_id=video.id,
         session_id=session.id,
@@ -523,7 +739,7 @@ async def generate_single_image(
         provider=provider,
         model_name=chosen_model,
         status="processing",
-        prompt_used=body.prompt,
+        prompt_used=final_prompt,
         mime_type="image/jpeg",
     )
     db.add(asset)
@@ -533,8 +749,8 @@ async def generate_single_image(
     # Single image runs directly (or fast in mock) so user sees immediate result on click
     await _run_image_job(
         asset_id=asset.id,
-        prompt=body.prompt,
-        ref_images=refs,
+        prompt=final_prompt,
+        ref_images=final_refs,
         provider=provider,
         model_override=body.model_override.strip(),
         aspect_ratio=body.aspect_ratio or "9:16",
@@ -564,7 +780,7 @@ async def generate_all_images(
             detail="尚未配置 OPENAI_API_KEY / OPENAI_IMAGE_API_KEY，请在 Render 环境变量中配置或切换为 Gemini 生图",
         )
 
-    refs, _ = _extract_product_ref_images(session)
+    product_refs, _ = _extract_product_ref_images(session)
     blueprints = _build_image_slot_blueprints(
         video,
         session,
@@ -615,11 +831,32 @@ async def generate_all_images(
         db.refresh(asset)
 
     async def _batch_runner(jobs: list[tuple[str, dict[str, Any]]]) -> None:
+        factory = get_session_factory()
         for aid, bp in jobs:
+            job_db = factory()
+            try:
+                v_row = job_db.get(VideoRecord, video.id)
+                s_row = job_db.get(ScanSession, session.id)
+                if v_row and s_row:
+                    shot_prompt, shot_refs = await _prepare_shot_image_inputs(
+                        video=v_row,
+                        session=s_row,
+                        db=job_db,
+                        slot_index=bp["slot_index"],
+                        shot_no=bp["shot_no"],
+                        prompt=bp["prompt"],
+                        product_refs=product_refs,
+                        use_character_ref=body.use_character_ref,
+                    )
+                else:
+                    shot_prompt, shot_refs = bp["prompt"], product_refs
+            finally:
+                job_db.close()
+
             await _run_image_job(
                 asset_id=aid,
-                prompt=bp["prompt"],
-                ref_images=refs,
+                prompt=shot_prompt,
+                ref_images=shot_refs,
                 provider=provider,
                 model_override=body.model_override.strip(),
                 aspect_ratio=bp["aspect_ratio"],

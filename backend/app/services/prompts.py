@@ -141,12 +141,19 @@ def build_deep_analysis_prompt(
         if analysis_mode == "native_video"
         else "当前无法拉取原视频流，已降级为封面图+元数据深度推演模式，请结合封面构图与标题文案给出高度可落地的复刻分镜与提示词。"
     )
-    return f"""你是顶级短视频编导、商业广告创意总监兼 AI 视频提示词专家（精通 **可灵 Kling** 视频生成与 **ChatGPT Images** 产品融合出图）。
+    return f"""你是顶级短视频编导、爆款 1:1 复刻导演兼 AI 视频提示词专家（精通 **可灵 Kling** 视频生成与 **GPT Image / Seedream** 产品融合出图）。
 {mode_note}
 
-请针对随附的高热爆款短视频（注意：它可能是同品类视频，也可能是**跨品类创意视觉模板**），彻底拆解它的爆款结构与镜头语言，并将原视频的核心主角物品**创造性地、无缝替换为用户的目标产品**，产出可直接复制落地的拆解报告与 AI 提示词。
+【核心铁律：1:1 忠实复刻原爆款的情节、分镜与场景，绝不凭空编一个不一样的新视频！】
+用户的明确要求：
+1. **严格保留原视频的情节、分镜顺序、场景构图、镜头运动与转场节奏**——不能把原片魔改成一个完全不同的故事或无关场景！
+2. **人物脱敏换角（全片统一 AI 人物）**：如果原视频里出现人物（模特/路人/主播/手部主角），**绝不能照搬原片真人的脸**，但必须保留这个人物在原片里的**相同情节动作与站位**，并将其替换为一个**全新的原创 AI 人物形象**（在 `director_plan.ai_character_profile_cn` 与 `ai_character_profile_en` 中明确写清年龄、性别、长相气质、发型、服装穿搭，并在每一个有人物出现的分镜提示词中 100% 复用这个完全一致的 AI 人物设定！若原片全程无人，则这两个字段写“无人物（纯静物/场景）”）。
+3. **像专业导演一样给用户「替换与改写意见」**：
+   - 先用 `director_plan.original_plot_summary` 客观还原原爆款视频到底讲了什么情节、每一镜发生什么；
+   - 在 `director_plan.product_placement_plan` 里清楚建议：用户的目标产品应该**安排在第几镜出场最自然**、哪些镜头**1:1 原样保留原片场景和情节（`replication_action: "keep_scene"`）**、哪些镜头把原物品**直接替换为目标产品（`replication_action: "insert_product"`）**、哪些镜头因产品属性差异**建议适度微调改写场景（`replication_action: "rewrite_scene"`）**；
+   - 在 `director_plan.open_questions_for_user` 提出 2~3 个具体、简洁的导演确认问题，方便用户在正式花钱生图/生视频前先和你对话修改定稿！
 
-目标产品基因卡（必须将原视频核心物品彻底替换为该产品）：
+目标产品基因卡：
 {dna_json}
 
 用户附加指令：
@@ -156,32 +163,41 @@ def build_deep_analysis_prompt(
 {meta_json}
 
 【强制质量规范】
-1. **禁止占位符**：所有分镜、改写文案、ChatGPT Images 提示词、可灵 Kling 提示词中，必须具体写出目标产品的真实外观、材质、颜色、功能特征与卖点，严禁出现 `[你的产品]`、`[产品名]` 等敷衍占位符！
-2. **跨品类巧妙融合**：如果原视频是跨品类创意模板（例如家具画册悬浮、CGI 巨物、空间美学展示等），请在 `replacement_strategy` 与 `storyboard` 中详细设计如何保留原视频最抓眼球的视觉魔法/构图节奏，同时把目标产品的独特优势（例如灯具的发光氛围、数码的精致质感等）自然融合进去！
-3. **AI 制作判定**：客观判断原视频是否为 AI / CGI 制作（`is_ai_generated`），给出置信度与判断依据；无论原视频是 AI 制作还是实拍，都必须完整输出 `chatgpt_images_prompts` 和 `kling_prompts`。
-4. **ChatGPT Images 提示词规范**（至少输出 4 条：第 1 条为“爆款主视觉/封面海报”，第 2~4+ 条对应关键分镜的首帧参考图）：
-   - 专门面向 ChatGPT Images 图生图/融合场景设计；
-   - `prompt_en` 必须是一段可直接复制的详尽英文自然语言指令，开头明确声明：Keep the exact product from the uploaded reference image (preserving its shape, material, color, texture, and logo 100% unchanged), 然后详述构图、光影融合、真实商业摄影质感、背景元素与画幅比例；
-   - 同时给出准确的 `prompt_cn`。
-5. **可灵 Kling 提示词规范**（与核心分镜一一对应，3~6 条）：
-   - 面向可灵 Kling 图生视频 (I2V) / 首尾帧工作流；
-   - `prompt_cn` 与 `prompt_en` 遵循可灵高出片公式：**主体与产品细节 + 流畅真实的物理动作/光影动态 + 明确运镜指令（如缓慢推进/环绕/俯拍拉远） + 氛围与电影级质感**；避免让视频模型生成文字；
-   - 给出具体的 `recommended_params`（时长 5s/10s、画质模式、运镜建议、创意相关性）与防变形 `negative_prompt`。
-6. **智能区分「AI 一键生成」与「手机实拍」分镜**（极其重要！）：
-   - 在 `storyboard` 的每个镜头里必须标明 `production_mode`：
-     - `"ai"`：适合用 AI 图生图 + 图生视频一键直出（如 FOOH 户外巨物、3D 悬浮、微缩世界、特效转场、高质感空镜海报）；
-     - `"real_shoot"`：建议用户直接拿手机 10 秒实拍更真实、转化更高（如真实手持展示、通电亮灯测试、真实安装对比、细节手感特写）；
-   - 并给出接地气的大白话 `real_shoot_guide`（机位放哪、怎么拿产品、光线与道具、拍几秒）和 `spoken_line`（该镜头对应的简短口播/字幕句）。
+1. **禁止占位符**：所有出现目标产品的分镜、改写文案、生图提示词、可灵提示词中，必须具体写出目标产品的真实外观、材质、颜色、功能特征与卖点，严禁出现 `[你的产品]`、`[产品名]` 等占位符！
+2. **不强行塞入产品**：如果原片第 1 镜是人物/氛围铺垫戏（还没到产品出场），则第 1 镜 `replication_action` 标为 `"keep_scene"`，不要硬把用户的产品塞进不该出现的镜头，保持原片的情节反转与悬念！
+3. **AI 制作判定**：客观判断原视频是否为 AI / CGI 制作（`is_ai_generated`），给出置信度与判断依据；无论原视频是 AI 还是实拍，都必须完整输出 `chatgpt_images_prompts` 和 `kling_prompts`。
+4. **生图提示词规范（`chatgpt_images_prompts` 必须与分镜一一对齐！）**：
+   - 第 1 条（索引 0）：爆款主视觉封面海报；
+   - 第 2 ~ N+1 条（索引 1..N）：**严格与 `storyboard` 分镜 1..N 一一对应**（不能漏镜、不能跳镜！）；
+   - 若该镜包含目标产品（`insert_product` / `rewrite_scene` 或封面海报）：`prompt_en` 开头必须明确声明 `Keep the exact product from the uploaded reference image (preserving its shape, material, color, texture, and logo 100% unchanged),`；
+   - 若该镜包含人物（`has_person: true`）：`prompt_en` 必须完整包含 `director_plan.ai_character_profile_en` 中的统一原创 AI 人物外貌与穿搭，确保全片人物不换脸、不撞脸原片真人！
+5. **可灵 Kling 提示词规范（与 `storyboard` 分镜 1..N 一一对应）**：
+   - 面向可灵 Kling 图生视频 (I2V)，严格复刻原片该镜头的真实物理动作、人物动作、特效与运镜，避免让视频模型生成文字；
+   - 给出具体的 `recommended_params` 与防变形 `negative_prompt`。
+6. **智能区分「AI 一键生成」与「手机实拍」分镜**：
+   - 每个分镜标明 `production_mode`（`"ai"` 或 `"real_shoot"`）、大白话 `real_shoot_guide`、`spoken_line`，以及 `replication_action`、`director_advice`、`has_person`。
 
 请严格输出纯 JSON（不含 markdown 代码块标记以外的文字），字段结构必须与下方完全一致：
 {{
   "is_ai_generated": false,
   "ai_confidence": 85,
   "ai_detection_reason": "具体判断依据",
+  "director_plan": {{
+    "original_plot_summary": "1:1 客观还原原爆款视频的完整情节、场景与反转节奏",
+    "ai_character_profile_cn": "全片统一的原创替换 AI 人物形象设定（如：26岁时尚女设计师，微卷深棕色齐肩发，身穿米白色极简西装外套；若原片无人物写'无人物（纯静物/场景）'）",
+    "ai_character_profile_en": "A stylish 26-year-old original female designer with shoulder-length dark brown wavy hair wearing a minimalist cream blazer (empty string if no person in video)",
+    "product_placement_plan": "导演替换建议：说明目标产品安排在第几镜出场、哪些镜头 1:1 原样保留、哪些场景建议适度改写及原因",
+    "open_questions_for_user": [
+      "当前为你设计的原创 AI 人物形象是否满意，还是想换成其他年龄/风格/穿搭？",
+      "目标产品安排在第 X 镜出场并保留原片前段悬念，你是否同意或想提前出场？"
+    ],
+    "revision_status": "draft",
+    "revision_history": []
+  }},
   "replaceability": {{
     "score": 90,
     "original_featured_item": "原视频核心展示物品",
-    "replacement_strategy": "具体可落地的替换方案：如何保留原片爆款视觉结构，把原物品无缝换成目标产品",
+    "replacement_strategy": "具体可落地的 1:1 替换方案：保留原片情节与场景构图，替换原物品与原人物",
     "replacement_difficulty": "低",
     "recommended_workflow": "实拍复刻 + AI复刻双方案皆可"
   }},
@@ -197,12 +213,15 @@ def build_deep_analysis_prompt(
       "time_range": "00:00-00:03",
       "shot_size": "特写",
       "camera_movement": "快速推镜",
-      "original_visual": "原视频该镜头画面内容",
-      "adapted_visual_for_product": "替换为目标产品后的精准分镜画面",
+      "original_visual": "原视频该镜头完整画面、场景、人物动作与物品内容",
+      "adapted_visual_for_product": "1:1 沿用原片场景与情节，替换新 AI 人物/目标产品后的精准分镜画面",
       "audio_sfx": "人声/音效/BGM变化",
       "production_mode": "ai",
       "real_shoot_guide": "手机竖屏 2x 焦段对准桌面中央产品，从距产品 40cm 匀速前推至 15cm，拍 3 秒即可",
-      "spoken_line": "别划走，这个细节你一定没见过！"
+      "spoken_line": "别划走，这个细节你一定没见过！",
+      "replication_action": "keep_scene",
+      "director_advice": "本镜 1:1 保留原片开场悬念场景与动作，仅将原片真人替换为统一的原创 AI 人物，暂不提前暴露产品",
+      "has_person": true
     }}
   ],
   "shooting_requirements": {{
@@ -222,7 +241,7 @@ def build_deep_analysis_prompt(
   "chatgpt_images_prompts": [
     {{
       "scene_title": "爆款主视觉海报（封面图）",
-      "usage_note": "在 ChatGPT 中上传你的产品实拍图，然后直接复制下方提示词发送",
+      "usage_note": "在工坊一键生成，自动融合你的产品参考图",
       "aspect_ratio": "9:16",
       "prompt_en": "Keep the exact product from the uploaded reference image...",
       "prompt_cn": "严格保持上传参考图中产品的外观、材质、颜色与细节完全一致..."
@@ -232,11 +251,57 @@ def build_deep_analysis_prompt(
     {{
       "shot_no": 1,
       "scene_title": "分镜1：黄金3秒亮相",
-      "mode": "图生视频 (I2V) — 上传上方分镜1首帧图后粘贴下方提示词",
+      "mode": "图生视频 (I2V) — 使用分镜1首帧图",
       "recommended_params": "时长: 5s | 画质: 高品质 | 运镜: 缓慢推进 | 创意相关性: 0.5",
-      "prompt_cn": "可直接复制到可灵中文版的完整提示词",
-      "prompt_en": "Direct copy-paste English prompt for Kling AI",
+      "prompt_cn": "可直接用于可灵的完整中文动作与运镜提示词",
+      "prompt_en": "Direct English motion & camera prompt for Kling AI",
       "negative_prompt": "变形, 模糊, 产品Logo扭曲, 穿模, 多余手指, 闪烁, 画面撕裂, 水印, 杂乱文字"
     }}
   ]
+}}"""
+
+
+def build_director_revision_prompt(
+    *,
+    product_dna: ProductDNA,
+    current_analysis: dict[str, Any],
+    user_feedback: str,
+    revision_history: list[dict[str, Any]],
+) -> str:
+    dna_json = json.dumps(product_dna.model_dump(), ensure_ascii=False, indent=2)
+    curr_json = json.dumps(current_analysis, ensure_ascii=False, indent=2)
+    hist_json = json.dumps(revision_history[-8:], ensure_ascii=False, indent=2)
+
+    return f"""你是用户的专属**爆款短视频 1:1 复刻导演**。用户正在和你共创、打磨这条爆款视频的复刻分镜方案（还没开始花钱生图/生视频）。
+请严格遵照用户的最新修改意见，对当前的 `analysis` 方案做精准修改，并**同步更新所有相关字段**，确保下一步点击生图和生视频时 100% 按照用户定稿执行！
+
+【修改铁律】
+1. **严格保留 1:1 原片情节与未被用户要求改动的分镜**：用户没要求改的场景、镜头、节奏不要乱动！
+2. **全链路同步更新**：
+   - 如果用户修改了**人物形象**（如年龄/性别/国籍/穿搭）→ 必须同时更新 `director_plan.ai_character_profile_cn`、`director_plan.ai_character_profile_en`，以及**所有 `has_person: true` 分镜的 `adapted_visual_for_product`、`chatgpt_images_prompts`、`kling_prompts`**！
+   - 如果用户调整了**产品出场分镜**（如“产品提前到第2镜出场”或“第1镜不要出现产品”）→ 必须同步更新对应分镜的 `replication_action`（`"keep_scene"` / `"insert_product"` / `"rewrite_scene"`）、`director_advice`、`adapted_visual_for_product`、`chatgpt_images_prompts`（含产品镜保留 `Keep the exact product from the uploaded reference image...`，不含产品镜移除产品描述！）和 `kling_prompts`！
+   - 如果用户改了**剧情/场景/口播文案** → 同步更新 `storyboard`、`copywriting`（中英文脚本）、`chatgpt_images_prompts`、`kling_prompts`！
+3. **`chatgpt_images_prompts` 索引对齐**：索引 0 为主视觉海报，索引 1..N 严格一一对应 `storyboard` 的分镜 1..N！
+4. **`kling_prompts` 对齐**：与 `storyboard` 分镜 1..N 严格一一对应！
+5. 用自然、专业的导演口吻在 `director_reply` 里简洁回复用户：说明你改了哪几个分镜、怎么落实了他的想法，并询问是否还有需要微调的地方或可以直接锁定定稿。
+
+目标产品基因卡：
+{dna_json}
+
+之前的导演共创对话记录：
+{hist_json}
+
+当前完整分镜方案 JSON：
+{curr_json}
+
+用户的最新修改意见（最高优先级，必须逐条落实）：
+{user_feedback}
+
+请严格输出纯 JSON（不要附加任何 markdown 以外的说明文字），结构如下：
+{{
+  "director_reply": "给用户的导演回复（简洁清楚说明改了哪些镜头、人物或产品植入位置）",
+  "changed_shots": [1, 2],
+  "analysis": {{
+    "...完整的更新后 VideoDeepAnalysis 对象，保留全部原有字段结构..."
+  }}
 }}"""
