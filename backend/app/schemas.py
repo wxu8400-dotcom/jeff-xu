@@ -21,12 +21,15 @@ class ProductDNA(BaseModel):
     usage_scenarios: list[str] = Field(default_factory=list)
     replaceable_visual_slots: list[str] = Field(default_factory=list)
     avoid_patterns: list[str] = Field(default_factory=list)
+    category_leak_keywords: list[str] = Field(default_factory=list)
     search_queries: SearchQueries = Field(default_factory=SearchQueries)
 
 
 class PreliminaryScreeningItem(BaseModel):
     candidate_id: str
     preliminary_score: int = Field(ge=0, le=100)
+    visual_creativity_score: int = Field(ge=0, le=100, default=75)
+    is_same_category: bool = False
     original_featured_item: str = ""
     reason: str = ""
     is_replaceable: bool = False

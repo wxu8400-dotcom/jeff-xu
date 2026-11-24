@@ -13,6 +13,7 @@ export interface ProductDNA {
   usage_scenarios: string[];
   replaceable_visual_slots: string[];
   avoid_patterns: string[];
+  category_leak_keywords?: string[];
   search_queries: SearchQueries;
 }
 
@@ -34,6 +35,7 @@ export interface FunnelStats {
   input_tokens?: number;
   output_tokens?: number;
   estimated_cost_cny?: number;
+  platform_counts?: Record<string, number>;
   warnings?: string[];
 }
 

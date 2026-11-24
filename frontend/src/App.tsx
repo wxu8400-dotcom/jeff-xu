@@ -28,6 +28,7 @@ import type {
 const DEFAULT_PARAMS: RadarFormParams = {
   mode: "radar",
   searchStrategy: "cross_category",
+  creativeStyles: [],
   platforms: ["tiktok", "instagram", "youtube"],
   minViews: 50000,
   minLikes: 2000,
@@ -195,6 +196,7 @@ export default function App() {
         fd.append("target_count", String(params.targetCount));
         fd.append("auto_relax", String(params.autoRelax));
         fd.append("search_strategy", params.searchStrategy);
+        fd.append("creative_styles", JSON.stringify(params.creativeStyles));
         resp = await api.startRadarScan(fd);
       }
 
@@ -408,6 +410,11 @@ export default function App() {
                             )
                           )}
                         </div>
+                        {activeSession.filter_config?.search_strategy === "cross_category" && (
+                          <div className="text-[11px] text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded-lg px-2.5 py-1.5">
+                            ✨ 跨品类爆款解耦模式：下方三平台搜索词已与上传产品完全解耦（严禁搜同品类），并会在初筛阶段自动剔除同品类视频，仅精选全网高创意爆款模板来替换你的产品。
+                          </div>
+                        )}
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 text-[11px] text-slate-400">
                           <div>
                             <b className="text-cyan-300">TK 词：</b>

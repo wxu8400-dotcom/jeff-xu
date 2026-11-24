@@ -91,8 +91,17 @@ export const ScanProgressBar: React.FC<Props> = ({
           <div className="flex flex-wrap items-center gap-2">
             <Filter className="w-3.5 h-3.5 text-sky-400" />
             <span>
-              漏斗：抓取 <b>{stats.collected ?? 0}</b> → 指标过滤{" "}
-              <b>{stats.after_hard_filter ?? 0}</b> → 可替换初筛{" "}
+              漏斗：抓取 <b>{stats.collected ?? 0}</b>
+              {stats.platform_counts && Object.keys(stats.platform_counts).length > 0 && (
+                <span className="text-slate-400">
+                  （
+                  {Object.entries(stats.platform_counts)
+                    .map(([k, v]) => `${k.toUpperCase()}:${v}`)
+                    .join(" / ")}
+                  ）
+                </span>
+              )}{" "}
+              → 指标过滤 <b>{stats.after_hard_filter ?? 0}</b> → 可替换初筛{" "}
               <b>{stats.after_screening ?? 0}</b> → 精拆收录{" "}
               <b className="text-emerald-400">{stats.analyzed ?? 0}</b>
             </span>

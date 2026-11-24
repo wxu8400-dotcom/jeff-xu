@@ -4,6 +4,7 @@ import { Link2, Radar, Sparkles } from "lucide-react";
 export interface RadarFormParams {
   mode: "radar" | "direct_urls";
   searchStrategy: "cross_category" | "hybrid" | "same_category";
+  creativeStyles: string[];
   platforms: string[];
   minViews: number;
   minLikes: number;
@@ -27,6 +28,15 @@ const PLATFORMS = [
   { id: "youtube", label: "YouTube Shorts", color: "border-rose-500/50 bg-rose-500/15 text-rose-300" },
 ];
 
+const CREATIVE_STYLES = [
+  { id: "fooh_cgi", label: "FOOH 户外巨物 CGI" },
+  { id: "3d_popout", label: "3D 悬浮 / 画册弹出" },
+  { id: "ai_commercial", label: "AI 超现实大片" },
+  { id: "vfx_transition", label: "无缝转场 / 脑洞运镜" },
+  { id: "miniature_world", label: "微缩世界 / 定格动画" },
+  { id: "luxury_aesthetic", label: "极简高级美学" },
+];
+
 export const RadarControls: React.FC<Props> = ({
   params,
   onChange,
@@ -41,6 +51,16 @@ export const RadarControls: React.FC<Props> = ({
       platforms: exists
         ? params.platforms.filter((p) => p !== id)
         : [...params.platforms, id],
+    });
+  };
+
+  const toggleCreativeStyle = (id: string) => {
+    const exists = params.creativeStyles.includes(id);
+    onChange({
+      ...params,
+      creativeStyles: exists
+        ? params.creativeStyles.filter((s) => s !== id)
+        : [...params.creativeStyles, id],
     });
   };
 
@@ -106,12 +126,12 @@ export const RadarControls: React.FC<Props> = ({
                 {
                   id: "cross_category" as const,
                   title: "✨ 跨品类爆款模板（推荐）",
-                  desc: "不限原品类，专搜全网创意/CGI/AI/美学爆款来替换物品",
+                  desc: "搜索词与产品 100% 解耦，绝不搜同品类；只抓全网创意爆款来替换物品",
                 },
                 {
                   id: "hybrid" as const,
                   title: "🔀 跨品类 + 同品类混合",
-                  desc: "创意广告模板与泛品类高热视频各搜一半",
+                  desc: "2 组纯跨品类爆款模板词 + 1 组同品类高热词",
                 },
                 {
                   id: "same_category" as const,
@@ -138,6 +158,45 @@ export const RadarControls: React.FC<Props> = ({
               })}
             </div>
           </div>
+
+          {params.searchStrategy !== "same_category" && (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-slate-400">
+                  爆款视觉创意模板（可多选，不选则全网跨品类爆款混搭）：
+                </span>
+                {params.creativeStyles.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => onChange({ ...params, creativeStyles: [] })}
+                    className="text-[11px] text-sky-400 hover:text-sky-300"
+                  >
+                    恢复全网混搭
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {CREATIVE_STYLES.map((style) => {
+                  const active = params.creativeStyles.includes(style.id);
+                  return (
+                    <button
+                      key={style.id}
+                      type="button"
+                      onClick={() => toggleCreativeStyle(style.id)}
+                      className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium border transition ${
+                        active
+                          ? "bg-emerald-500/15 border-emerald-400/60 text-emerald-200"
+                          : "bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-200"
+                      }`}
+                    >
+                      {active ? "✓ " : "+ "}
+                      {style.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Quick presets */}
           <div className="flex flex-wrap items-center gap-2 text-xs">

@@ -30,6 +30,11 @@ from .prompts import (
     build_product_dna_prompt,
 )
 from .video_processor import download_and_compress_video
+from .viral_templates import (
+    item_matches_same_category,
+    normalize_creative_styles,
+    resolve_platform_queries,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -231,6 +236,13 @@ async def run_radar_pipeline(
             product_name_override.strip() or product_dna.product_name.strip() or "未命名产品"
         )
         product_dna.product_name = final_product_name
+        creative_styles = normalize_creative_styles(filter_config.get("creative_styles"))
+        product_dna.search_queries = resolve_platform_queries(
+            product_dna=product_dna,
+            search_strategy=search_strategy,
+            creative_styles=creative_styles,
+            user_instruction=user_instruction,
+        )
         new_history_title = format_history_title(final_product_name)
 
         _update_session(
@@ -239,7 +251,11 @@ async def run_radar_pipeline(
             history_title=new_history_title,
             product_dna=product_dna.model_dump(),
             progress_percent=22,
-            progress_message=f"《产品基因卡》生成完成：{final_product_name}",
+            progress_message=(
+                f"《产品基因卡》生成完成：{final_product_name}（已启用纯跨品类爆款视觉模板词，与原产品解耦）"
+                if search_strategy == "cross_category"
+                else f"《产品基因卡》生成完成：{final_product_name}"
+            ),
             funnel_stats=stats,
         )
 
@@ -337,7 +353,7 @@ async def run_radar_pipeline(
                 session_id,
                 status="screening",
                 progress_percent=54,
-                progress_message=f"阶段 4/5：正在对 {len(filter_out.selected)} 条高热候选执行低成本「可替换性」初筛（不下载视频）...",
+                progress_message=f"阶段 4/5：正在对 {len(filter_out.selected)} 条高热候选执行低成本「爆款视觉与可替换性」初筛（不下载视频）...",
                 funnel_stats=stats,
             )
             scored_candidates = await _screen_replaceability(
@@ -347,13 +363,20 @@ async def run_radar_pipeline(
                 candidates=filter_out.selected,
                 total_usage=total_usage,
                 is_mock=cfg.enable_mock_mode,
+                search_strategy=search_strategy,
             )
             _sync_tokens()
 
-            # Keep cross-category replaceable videos (score >= 60)
-            qualified = [x for x in scored_candidates if x[1] >= 60]
-            qualified.sort(key=lambda x: x[1], reverse=True)
-            selected_for_deep = qualified[:target_count]
+            selected_for_deep, excluded_same_cat = select_candidates_for_deep_analysis(
+                scored_candidates=scored_candidates,
+                product_dna=product_dna,
+                search_strategy=search_strategy,
+                target_count=target_count,
+            )
+            if excluded_same_cat > 0:
+                stats["warnings"].append(
+                    f"跨品类严格模式：已自动过滤 {excluded_same_cat} 条同品类产品视频，仅保留跨品类爆款视觉模板"
+                )
             stats["after_screening"] = len(selected_for_deep)
 
             if not selected_for_deep:
@@ -361,7 +384,7 @@ async def run_radar_pipeline(
                     session_id,
                     status="completed",
                     progress_percent=100,
-                    progress_message=f"已抓取 {stats['collected']} 条（{plat_summary}），但本轮初筛最高可替换分均低于 60 分。建议在「雷达指令」里指定想要参考的创意风格（如 AI悬浮/画册弹出/空间改造）重试。",
+                    progress_message=f"已抓取 {stats['collected']} 条（{plat_summary}），但本轮初筛未找到满足条件的跨品类高可替换爆款。建议切换创意模板风格或重试。",
                     funnel_stats=stats,
                 )
                 return
@@ -558,8 +581,130 @@ def _queries_for(dna: ProductDNA, platform: str) -> list[str]:
     }
     queries = [q for q in (q_map.get(platform) or []) if q.strip()]
     if not queries:
-        queries = [f"{dna.product_name} viral review", f"{dna.category} must have"]
+        queries = ["fooh cgi", "3d product animation", "creative commercial"]
     return queries[:3]
+
+
+class _ScreenedCandidate:
+    __slots__ = (
+        "candidate",
+        "preliminary_score",
+        "visual_creativity_score",
+        "is_same_category",
+        "is_replaceable",
+        "original_featured_item",
+    )
+
+    def __init__(
+        self,
+        *,
+        candidate: CandidateVideo,
+        preliminary_score: int,
+        visual_creativity_score: int,
+        is_same_category: bool,
+        is_replaceable: bool,
+        original_featured_item: str,
+    ) -> None:
+        self.candidate = candidate
+        self.preliminary_score = preliminary_score
+        self.visual_creativity_score = visual_creativity_score
+        self.is_same_category = is_same_category
+        self.is_replaceable = is_replaceable
+        self.original_featured_item = original_featured_item
+
+    @property
+    def composite_score(self) -> int:
+        return int(round(self.visual_creativity_score * 0.55 + self.preliminary_score * 0.45))
+
+
+def select_candidates_for_deep_analysis(
+    *,
+    scored_candidates: list[_ScreenedCandidate],
+    product_dna: ProductDNA,
+    search_strategy: str,
+    target_count: int,
+) -> tuple[list[tuple[CandidateVideo, int, str]], int]:
+    """Select top candidates for Stage 4 deep analysis.
+
+    In `cross_category` mode:
+    - Strictly filters out candidates whose original featured item belongs to the same
+      category as the uploaded product (both via AI flag and deterministic item check).
+    - Ranks by combined viral visual creativity + replaceability score.
+    - Balances across platforms (round-robin top from each platform first) so multi-platform
+      scans don't get monopolized by a single platform.
+    """
+    qualified = [
+        sc
+        for sc in scored_candidates
+        if sc.preliminary_score >= 60 and sc.is_replaceable
+    ]
+    excluded_same_cat = 0
+
+    if search_strategy == "cross_category":
+        cross_pool: list[_ScreenedCandidate] = []
+        for sc in qualified:
+            same_cat = sc.is_same_category or item_matches_same_category(
+                sc.original_featured_item, product_dna
+            )
+            if same_cat:
+                excluded_same_cat += 1
+            else:
+                cross_pool.append(sc)
+        pool = cross_pool
+    else:
+        pool = qualified
+
+    if not pool:
+        return [], excluded_same_cat
+
+    rank_key = (
+        (lambda sc: (sc.composite_score, sc.preliminary_score, sc.candidate.views))
+        if search_strategy == "cross_category"
+        else (lambda sc: (sc.preliminary_score, sc.visual_creativity_score, sc.candidate.views))
+    )
+
+    by_platform: dict[str, list[_ScreenedCandidate]] = {}
+    for sc in pool:
+        by_platform.setdefault(sc.candidate.platform, []).append(sc)
+    for plat_list in by_platform.values():
+        plat_list.sort(key=rank_key, reverse=True)
+
+    # Round-robin top pick per platform (ordered by each platform's best score) for diversity
+    chosen: list[_ScreenedCandidate] = []
+    chosen_ids: set[tuple[str, str]] = set()
+    plat_order = sorted(
+        by_platform.keys(),
+        key=lambda p: rank_key(by_platform[p][0]),
+        reverse=True,
+    )
+    for plat in plat_order:
+        if len(chosen) >= target_count:
+            break
+        top_item = by_platform[plat][0]
+        chosen.append(top_item)
+        chosen_ids.add((top_item.candidate.platform, top_item.candidate.platform_video_id))
+
+    # Fill remaining slots globally by highest rank
+    remaining = sorted(pool, key=rank_key, reverse=True)
+    for sc in remaining:
+        if len(chosen) >= target_count:
+            break
+        key = (sc.candidate.platform, sc.candidate.platform_video_id)
+        if key in chosen_ids:
+            continue
+        chosen.append(sc)
+        chosen_ids.add(key)
+
+    chosen.sort(key=rank_key, reverse=True)
+    result = [
+        (
+            sc.candidate,
+            sc.composite_score if search_strategy == "cross_category" else sc.preliminary_score,
+            sc.original_featured_item,
+        )
+        for sc in chosen[:target_count]
+    ]
+    return result, excluded_same_cat
 
 
 async def _screen_replaceability(
@@ -570,9 +715,10 @@ async def _screen_replaceability(
     candidates: list[CandidateVideo],
     total_usage: TokenUsage,
     is_mock: bool,
-) -> list[tuple[CandidateVideo, int, str]]:
+    search_strategy: str = "cross_category",
+) -> list[_ScreenedCandidate]:
     cand_map = {f"{c.platform}:{c.platform_video_id}": c for c in candidates}
-    scored: list[tuple[CandidateVideo, int, str]] = []
+    scored: list[_ScreenedCandidate] = []
 
     batch_size = 5
     for start in range(0, len(candidates), batch_size):
@@ -605,6 +751,7 @@ async def _screen_replaceability(
             product_dna=product_dna,
             user_instruction=user_instruction,
             candidates=payload_list,
+            search_strategy=search_strategy,
         )
         batch_res, usage = await ai.generate_structured(
             prompt=prompt,
@@ -619,7 +766,14 @@ async def _screen_replaceability(
             cand = cand_map.get(item.candidate_id)
             if cand:
                 scored.append(
-                    (cand, item.preliminary_score, item.original_featured_item)
+                    _ScreenedCandidate(
+                        candidate=cand,
+                        preliminary_score=item.preliminary_score,
+                        visual_creativity_score=item.visual_creativity_score,
+                        is_same_category=item.is_same_category,
+                        is_replaceable=item.is_replaceable,
+                        original_featured_item=item.original_featured_item,
+                    )
                 )
 
     return scored

@@ -28,6 +28,7 @@ from ..schemas import ScanSessionDetail, ScanSessionSummary
 from ..services.exporter import export_session_json, export_session_markdown
 from ..services.pipeline import event_broker, format_history_title, run_radar_pipeline
 from ..services.product_parser import UploadedRawFile, parse_product_materials
+from ..services.viral_templates import normalize_creative_styles
 
 router = APIRouter(
     prefix="/api/scans",
@@ -77,6 +78,16 @@ def _parse_platforms(raw: str) -> list[str]:
     return cleaned or ["tiktok", "instagram", "youtube"]
 
 
+def _parse_creative_styles(raw: str) -> list[str]:
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return normalize_creative_styles(parsed)
+    except Exception:
+        pass
+    return normalize_creative_styles(raw.split(","))
+
+
 @router.post("")
 async def create_radar_scan(
     db: Annotated[Session, Depends(get_db)],
@@ -91,6 +102,7 @@ async def create_radar_scan(
     target_count: int = Form(default=5),
     auto_relax: bool = Form(default=True),
     search_strategy: str = Form(default="cross_category"),
+    creative_styles: str = Form(default="[]"),
 ) -> dict[str, str]:
     raw_files = await _read_uploads(files)
     if not raw_files and not product_text.strip() and not product_name_override.strip():
@@ -101,6 +113,7 @@ async def create_radar_scan(
 
     bundle = await asyncio.to_thread(parse_product_materials, raw_files, product_text)
     plat_list = _parse_platforms(platforms)
+    style_list = _parse_creative_styles(creative_styles)
     initial_name = product_name_override.strip() or "解析中产品"
     clean_strategy = (
         search_strategy
@@ -114,6 +127,7 @@ async def create_radar_scan(
         "target_count": max(1, min(target_count, 10)),
         "auto_relax": auto_relax,
         "search_strategy": clean_strategy,
+        "creative_styles": style_list,
     }
 
     session = ScanSession(

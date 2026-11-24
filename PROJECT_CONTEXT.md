@@ -47,6 +47,8 @@
 - `098e14c`：V1.0 完整前后端交付（FastAPI + React Vite Tailwind + 四级省 Token 漏斗 + 5 项 pytest 全过 + Render Docker 首次 1m38s 部署成功）。
 - `a98017f`：升级默认模型为 `gemini-3.5-flash-lite` / `gemini-3.5-flash` 并增加 404 自动降级容错。
 - `e7ee173`：重构跨品类爆款视觉模板双轨搜索策略 + 放宽跨品类可替换初筛评分 + 对齐 TikHub 最新 OpenAPI 专用搜索路由（`fetch_video_search_result`、`v2/search_reels`、`web_v2/get_shorts_search_v2`）+ 递归字段解析 + 分平台抓取数量展示。
+- `ba33e4b`：新增跨品类/混合/同品类搜索策略切换 + Gemini `503/429` 自动重试与多模型降级链。
+- 本次迭代：代码级彻底解耦跨品类搜索与上传产品（新增 `viral_templates.py` 6 大爆款视觉创意模板词库 + 中英双语品类泄漏词硬拦截 + 初筛阶段同品类硬剔除与三平台均衡筛选 + 前端创意视觉模板多选标签 + 9 项 pytest 全过）。
 
 ---
 

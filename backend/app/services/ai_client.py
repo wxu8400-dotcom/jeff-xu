@@ -366,10 +366,11 @@ class UnifiedAIClient:
                     "AI创意微缩/悬浮产品大片",
                 ],
                 avoid_patterns=["纯人脸口播无实物道具", "大型汽车家具改装", "强明星IP剧情"],
+                category_leak_keywords=[raw_name] if raw_name else [],
                 search_queries=SearchQueries(
-                    tiktok=["viral gadget must have", "amazon finds unboxing", "aesthetic desk essentials"],
-                    instagram=["viral product reels", "aesthetic gadget review", "ai product commercial"],
-                    youtube=["viral gadgets shorts", "satisfying product test shorts", "must have tech shorts"],
+                    tiktok=["fooh cgi", "3d product animation", "ai commercial ad"],
+                    instagram=["fooh", "3dproductanimation", "creativecommercial"],
+                    youtube=["fooh cgi commercial", "3d product animation commercial", "ai commercial video shorts"],
                 ),
             )
             return dna, TokenUsage(input_tokens=620, output_tokens=310)  # type: ignore[return-value]
@@ -381,23 +382,28 @@ class UnifiedAIClient:
                 title_lower = (cand.get("title", "") + " " + cand.get("caption", "")).lower()
                 if any(bad in title_lower for bad in ["street interview", "podcast", "drama", "prank", "口播", "街访"]):
                     score = 32
+                    creativity = 25
                     item_name = "无明确实物（纯人物对话）"
                     reason = "纯人物对话/街访类内容，无清晰产品展示槽位，直接淘汰"
                     ok = False
-                elif any(good in title_lower for good in ["ai", "cgi", "3d", "unboxing", "aesthetic", "gadget", "review"]):
+                elif any(good in title_lower for good in ["ai", "cgi", "3d", "fooh", "unboxing", "aesthetic", "gadget", "review"]):
                     score = 92
-                    item_name = "桌面/手持爆款消费好物"
-                    reason = "主体产品镜头占比高、结构清晰，极易替换为目标产品"
+                    creativity = 94
+                    item_name = "跨品类爆款创意展示单品"
+                    reason = "强视觉创意模板且主体产品镜头占比高，极易替换为目标产品复刻爆款元素"
                     ok = True
                 else:
                     score = 78
-                    item_name = "日常便携实物道具"
-                    reason = "具备清晰手部展示与痛点对比镜头，可替换性良好"
+                    creativity = 76
+                    item_name = "日常跨品类实物道具"
+                    reason = "具备清晰展示与对比镜头，可替换性良好"
                     ok = True
                 items.append(
                     PreliminaryScreeningItem(
                         candidate_id=str(cand["candidate_id"]),
                         preliminary_score=score,
+                        visual_creativity_score=creativity,
+                        is_same_category=False,
                         original_featured_item=item_name,
                         reason=reason,
                         is_replaceable=ok,
