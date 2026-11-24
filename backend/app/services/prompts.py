@@ -452,3 +452,131 @@ def build_image_refinement_prompt(
   "refined_prompt_en": "Complete, photorealistic vertical 9:16 English image generation prompt applying the user's exact visual fix while preserving the exact uploaded product (NO cartoon, NO anime, NO text, NO watermark)",
   "refined_prompt_cn": "精修后的中文画面提示词对照"
 }}"""
+
+
+def build_prompt_import_prompt(
+    *,
+    product_name: str,
+    product_text: str,
+    pasted_prompt_text: str,
+    screenshot_count: int,
+    product_photo_count: int,
+) -> str:
+    return f"""你是顶级 AI 视频制作执行导演（精通 **GPT Image / Seedream 多图融合生图** 与 **可灵 Kling I2V 图生视频**）。
+用户已经在外部工具（如 Codex）完成了爆款视频拆解并定稿了完整提示词，现在把**提示词截图（共 {screenshot_count} 张，排在附带图片的最前面）**和/或**提示词文字**，以及**目标商品多角度实拍图（共 {product_photo_count} 张，排在后面）**一起上传给你，希望你**100% 忠实照着截图里的提示词内容**直接拆成可执行的生图指令与可灵视频指令，进入后续制作流程！
+
+【最高铁律 — 100% 忠实还原用户提示词截图，绝不擅自删减或魔改剧情！】
+1. **逐字看清每一张提示词截图**：
+   - 将截图中的所有文字（包括总述、【产品一致性】、【人物与场景】、所有时间段如 `0–3秒` / `3–6秒` / `6–9秒` / `9–12秒` / `12–15秒` 或 `镜头一/二/三/四`、【摄影与声音】、【统一排除要求/负向约束】）**一字不漏地完整整理**到 `director_plan.current_master_prompt_cn`（以及 `original_video_prompt_cn`）中，并将排除约束单独放入 `director_plan.negative_constraints`！
+2. **严格按截图里的每一段时间/镜头，一一对应生成可执行段落（`storyboard`、`chatgpt_images_prompts`、`kling_prompts`）**：
+   - 如果截图里写了 5 个时间段（例如 `0–3秒`、`3–6秒`、`6–9秒`、`9–12秒`、`12–15秒`），`storyboard` 就必须严格输出 **5 个对应段落**（绝不能私自合并成 3 段丢掉“喷发弹射”或“飞回机舱”！）；如果截图写了 4 个镜头，就严格输出 4 个对应段落！
+   - 仔细观察后面附带的用户商品实拍图，把商品的真实颜色、造型比例、材质纹理、抱枕/配件细节完整融入英文生图提示词；
+   - **重要**：如果某一段是纯环境/纯火山过渡、截图明确没有出现商品，标 `replication_action: "keep_scene"`；凡是出现迷你版或正常尺寸商品的段落，标 `replication_action: "insert_product"`，并在 `chatgpt_images_prompts` 对应 `prompt_en` 中明确写明：
+     - 迷你版：`a miniature palm-sized version of the exact product from the uploaded reference images ({product_name}, keeping its exact color, shape, material, and cushions, ignoring any background clutter from the product photos)`
+     - 正常尺寸：`Keep the exact full-size product from the uploaded reference images ({product_name}, 100% faithful to its exact color, shape, texture, and accessories, ignoring any background clutter from the product photos)`
+   - **人物统一**：从截图的【人物与场景】提取全片统一的人物外貌与穿搭写入 `director_plan.ai_character_profile_cn` / `ai_character_profile_en`，在每一个有人物出现的段落标 `has_person: true` 并在 `prompt_en` 中严格复用同一人物设定！
+3. **`chatgpt_images_prompts` 索引严格对齐**：
+   - 索引 0：主视觉海报（封面图）；
+   - 索引 1..N：**严格一一对应 `storyboard` 第 1..N 段的首帧参考图**（写实电影摄影质感、9:16 竖屏、无文字无水印，100% 落实截图里该段的机位、景别、前景/背景、人物动作与商品状态！）。
+4. **`kling_prompts` 严格对齐第 1..N 段**：
+   - 逐段还原截图里的物理运动、抛投轨迹、远小近大透视、火山喷发、前景遮挡转场、落地阴影与人物坐下压缩/表情变化；
+   - `negative_prompt` 直接带上截图里的全部排除要求！
+
+用户填写的商品名称：{product_name or "请从提示词截图与商品图中自动识别"}
+用户补充商品说明：{product_text or "无（请直接参考附带的提示词截图与商品实拍图）"}
+用户直接粘贴的提示词文本（若有，与截图合并整理）：
+{pasted_prompt_text or "（无纯文本，请完整识别上方附带的提示词截图）"}
+
+请严格输出纯 JSON（不含 markdown 代码块以外的说明文字），结构与下方完全一致：
+{{
+  "is_ai_generated": true,
+  "ai_confidence": 98,
+  "ai_detection_reason": "用户导入的定稿提示词直出制作任务",
+  "director_plan": {{
+    "original_plot_summary": "一句话概括用户提示词的完整创意流程",
+    "original_video_prompt_cn": "100% 忠实提取并整理自用户截图/文本的完整中文总提示词",
+    "original_video_prompt_en": "Complete faithful English translation of the user's imported prompt",
+    "current_master_prompt_cn": "与 original_video_prompt_cn 完全一致",
+    "current_master_prompt_en": "与 original_video_prompt_en 完全一致",
+    "negative_constraints": "从截图中完整提取的【统一排除要求】",
+    "has_user_customized": true,
+    "keyframe_previews": [],
+    "ai_character_profile_cn": "从截图提取的全片统一写实人物中文设定",
+    "ai_character_profile_en": "Consistent photorealistic real human English profile from screenshot",
+    "product_placement_plan": "已严格按导入提示词的每一段时间轴完成生图与可灵视频指令拆解",
+    "open_questions_for_user": [],
+    "revision_status": "locked",
+    "revision_history": []
+  }},
+  "replaceability": {{
+    "score": 98,
+    "original_featured_item": "{product_name or '目标商品'}",
+    "replacement_strategy": "严格按用户上传的定稿提示词执行生图与可灵视频制作",
+    "replacement_difficulty": "低",
+    "recommended_workflow": "一键生图确认（支持单图中文修正）→ 可灵生成动态视频 → 合成 9:16 成片 MP4"
+  }},
+  "structure": {{
+    "hook_3s": "开场前 3 秒画面钩子",
+    "pacing_curve": "全片时间轴推进节奏",
+    "conversion_cta": "结尾产品展示与情绪落点",
+    "viral_reasons": ["反常识超现实视觉奇观", "完整保留用户定稿脚本细节"]
+  }},
+  "storyboard": [
+    {{
+      "shot_no": 1,
+      "time_range": "00:00-00:03",
+      "shot_size": "广角中近景",
+      "camera_movement": "跟随运镜",
+      "original_visual": "对应截图该时间段的完整中文画面描述",
+      "adapted_visual_for_product": "对应截图该时间段的完整中文画面描述",
+      "audio_sfx": "对应截图该段的声音/音效描述",
+      "production_mode": "ai",
+      "real_shoot_guide": "",
+      "spoken_line": "",
+      "replication_action": "insert_product",
+      "director_advice": "",
+      "has_person": true
+    }}
+  ],
+  "shooting_requirements": {{
+    "lighting": "从截图提取的光线要求",
+    "camera_setup": "从截图提取的机位与摄影风格",
+    "props_and_scene": "从截图提取的场景与道具设定",
+    "editing_rhythm": "从截图提取的转场与节奏",
+    "bgm_style": "从截图提取的声音与音效设计"
+  }},
+  "copywriting": {{
+    "original_transcript": "无口播（纯视觉+环境音效）",
+    "chinese_translation": "",
+    "adapted_script_cn": "",
+    "adapted_script_en": "",
+    "caption_and_hashtags": ""
+  }},
+  "chatgpt_images_prompts": [
+    {{
+      "scene_title": "主视觉海报（封面图）",
+      "usage_note": "自动融合上传的多角度商品图",
+      "aspect_ratio": "9:16",
+      "prompt_en": "Keep the exact product from the uploaded reference images...",
+      "prompt_cn": "严格保持上传商品外观一致的主视觉封面..."
+    }},
+    {{
+      "scene_title": "画面 1 首帧图（0-3秒）",
+      "usage_note": "严格对应截图第一段首帧画面",
+      "aspect_ratio": "9:16",
+      "prompt_en": "Photorealistic vertical 9:16 cinema frame...",
+      "prompt_cn": "对应截图第一段首帧中文画面..."
+    }}
+  ],
+  "kling_prompts": [
+    {{
+      "shot_no": 1,
+      "scene_title": "画面 1 动态视频（0-3秒）",
+      "mode": "图生视频 (I2V)",
+      "recommended_params": "时长: 5s | 画质: 高品质",
+      "prompt_cn": "严格还原截图第一段全部动作与运镜的中文可灵提示词",
+      "prompt_en": "Detailed English Kling I2V motion & camera prompt matching segment 1",
+      "negative_prompt": "从截图提取的完整负向排除约束"
+    }}
+  ]
+}}"""

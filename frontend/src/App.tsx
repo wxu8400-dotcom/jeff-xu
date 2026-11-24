@@ -26,7 +26,7 @@ import type {
 } from "./types/radar";
 
 const DEFAULT_PARAMS: RadarFormParams = {
-  mode: "direct_urls",
+  mode: "prompt_import",
   searchStrategy: "cross_category",
   creativeStyles: [],
   platforms: ["tiktok", "instagram", "youtube"],
@@ -37,6 +37,8 @@ const DEFAULT_PARAMS: RadarFormParams = {
   autoRelax: true,
   userInstruction: "",
   directUrls: "",
+  promptImages: [],
+  promptText: "",
 };
 
 export default function App() {
@@ -62,6 +64,7 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null);
 
   const unsubRef = useRef<(() => void) | null>(null);
+  const autoOpenedSessionRef = useRef<string | null>(null);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -137,6 +140,20 @@ export default function App() {
     return () => clearInterval(timer);
   }, [activeSessionId, activeSessionStatus, historyQuery, refreshHistory]);
 
+  // Auto-open the Studio Workbench right away when a prompt_import session finishes
+  useEffect(() => {
+    if (
+      activeSession &&
+      activeSession.mode === "prompt_import" &&
+      activeSession.status === "completed" &&
+      activeSession.videos.length === 1 &&
+      autoOpenedSessionRef.current !== activeSession.id
+    ) {
+      autoOpenedSessionRef.current = activeSession.id;
+      setSelectedVideo(activeSession.videos[0]);
+    }
+  }, [activeSession]);
+
   const subscribeToSession = useCallback(
     (sessionId: string) => {
       unsubRef.current?.();
@@ -199,13 +216,20 @@ export default function App() {
 
   const handleStartScan = async () => {
     setFormError("");
-    if (files.length === 0 && !productText.trim() && !productName.trim()) {
-      setFormError("请先上传至少一份产品资料（图片/视频/文档）或输入产品说明");
-      return;
-    }
-    if (params.mode === "direct_urls" && !params.directUrls.trim()) {
-      setFormError("请粘贴至少 1 条 TikTok / Instagram / YouTube 视频链接");
-      return;
+    if (params.mode === "prompt_import") {
+      if (params.promptImages.length === 0 && !params.promptText.trim()) {
+        setFormError("请至少上传 1 张提示词截图（如 Codex 截图），或粘贴提示词文本");
+        return;
+      }
+    } else {
+      if (files.length === 0 && !productText.trim() && !productName.trim()) {
+        setFormError("请先上传至少一份产品资料（图片/视频/文档）或输入产品说明");
+        return;
+      }
+      if (params.mode === "direct_urls" && !params.directUrls.trim()) {
+        setFormError("请粘贴至少 1 条 TikTok / Instagram / YouTube 视频链接");
+        return;
+      }
     }
 
     setSubmitting(true);
@@ -214,13 +238,18 @@ export default function App() {
       files.forEach((f) => fd.append("files", f));
       fd.append("product_text", productText);
       fd.append("product_name_override", productName);
-      fd.append("user_instruction", params.userInstruction);
 
       let resp: { session_id: string; history_title: string };
-      if (params.mode === "direct_urls") {
+      if (params.mode === "prompt_import") {
+        params.promptImages.forEach((img) => fd.append("prompt_images", img));
+        fd.append("prompt_text", params.promptText);
+        resp = await api.startPromptImport(fd);
+      } else if (params.mode === "direct_urls") {
+        fd.append("user_instruction", params.userInstruction);
         fd.append("urls", params.directUrls);
         resp = await api.startDirectUrlScan(fd);
       } else {
+        fd.append("user_instruction", params.userInstruction);
         fd.append("platforms", JSON.stringify(params.platforms));
         fd.append("min_views", String(params.minViews));
         fd.append("min_likes", String(params.minLikes));

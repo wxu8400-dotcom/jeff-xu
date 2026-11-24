@@ -27,8 +27,13 @@ from ..database import get_db
 from ..models import ScanSession, VideoRecord
 from ..schemas import ScanSessionDetail, ScanSessionSummary
 from ..services.exporter import export_session_json, export_session_markdown
-from ..services.pipeline import event_broker, format_history_title, run_radar_pipeline
-from ..services.product_parser import UploadedRawFile, parse_product_materials
+from ..services.pipeline import (
+    event_broker,
+    format_history_title,
+    run_prompt_import_pipeline,
+    run_radar_pipeline,
+)
+from ..services.product_parser import UploadedRawFile, _resize_jpeg, parse_product_materials
 from ..services.viral_templates import normalize_creative_styles
 
 router = APIRouter(
@@ -243,6 +248,89 @@ async def create_direct_url_scan(
             platforms=["tiktok", "instagram", "youtube"],
             filter_config={"target_count": len(url_list[:5])},
             direct_urls=url_list[:5],
+        )
+    )
+    _active_tasks.add(task)
+    task.add_done_callback(_active_tasks.discard)
+
+    return {"session_id": session.id, "history_title": session.history_title}
+
+
+@router.post("/from-prompts")
+async def create_prompt_import_scan(
+    db: Annotated[Session, Depends(get_db)],
+    files: list[UploadFile] | None = File(default=None),
+    prompt_images: list[UploadFile] | None = File(default=None),
+    prompt_text: str = Form(default=""),
+    product_text: str = Form(default=""),
+    product_name_override: str = Form(default=""),
+) -> dict[str, str]:
+    """Import finalized prompt screenshots (e.g. from Codex) and/or pasted prompt text
+    alongside multi-angle product photos to jump directly into image & Kling video generation."""
+    raw_product_files = await _read_uploads(files)
+    raw_prompt_imgs = await _read_uploads(prompt_images)
+    clean_prompt_text = prompt_text.strip()
+
+    if not raw_prompt_imgs and not clean_prompt_text:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="请上传至少 1 张提示词截图，或直接粘贴提示词文本",
+        )
+
+    product_bundle = await asyncio.to_thread(
+        parse_product_materials, raw_product_files, product_text
+    )
+
+    # Keep prompt screenshots crisp (max 1600px) for razor-sharp Chinese OCR,
+    # strictly separated from session.product_assets!
+    def _prep_screenshots() -> list[tuple[bytes, str]]:
+        out: list[tuple[bytes, str]] = []
+        for item in raw_prompt_imgs[:10]:
+            try:
+                jpg = _resize_jpeg(item.data, max_side=1600, quality=88)
+                out.append((jpg, "image/jpeg"))
+            except Exception:
+                out.append((item.data, item.content_type or "image/jpeg"))
+        return out
+
+    prepared_screenshots = await asyncio.to_thread(_prep_screenshots)
+    initial_name = product_name_override.strip() or "提示词直出商品"
+
+    session = ScanSession(
+        history_title=format_history_title(initial_name),
+        product_name=initial_name,
+        mode="prompt_import",
+        status="queued",
+        progress_percent=10,
+        progress_message="已收到提示词截图与商品图，正在启动高清识别与制作工坊...",
+        user_instruction=clean_prompt_text[:500],
+        platforms=["custom"],
+        filter_config={
+            "prompt_screenshot_count": len(prepared_screenshots),
+            "has_prompt_text": bool(clean_prompt_text),
+        },
+        product_assets=product_bundle.assets_meta,
+        funnel_stats={
+            "collected": 1,
+            "after_hard_filter": 1,
+            "after_screening": 1,
+            "analyzed": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "estimated_cost_cny": 0.0,
+        },
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    task = asyncio.create_task(
+        run_prompt_import_pipeline(
+            session_id=session.id,
+            product_bundle=product_bundle,
+            prompt_screenshots=prepared_screenshots,
+            pasted_prompt_text=clean_prompt_text,
+            product_name_override=product_name_override,
         )
     )
     _active_tasks.add(task)

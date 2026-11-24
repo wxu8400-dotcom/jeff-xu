@@ -73,6 +73,15 @@ export const api = {
       }
     ),
 
+  startPromptImport: (formData: FormData) =>
+    apiFetch<{ session_id: string; history_title: string }>(
+      "/api/scans/from-prompts",
+      {
+        method: "POST",
+        body: formData,
+      }
+    ),
+
   exportUrl: (id: string, format: "md" | "json") =>
     `/api/scans/${encodeURIComponent(id)}/export?format=${format}`,
 

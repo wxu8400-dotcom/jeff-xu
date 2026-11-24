@@ -1,8 +1,8 @@
-import React from "react";
-import { Link2, Radar, Sparkles } from "lucide-react";
+import React, { useRef } from "react";
+import { ImagePlus, Link2, Radar, Sparkles, X } from "lucide-react";
 
 export interface RadarFormParams {
-  mode: "radar" | "direct_urls";
+  mode: "prompt_import" | "direct_urls" | "radar";
   searchStrategy: "cross_category" | "hybrid" | "same_category";
   creativeStyles: string[];
   platforms: string[];
@@ -13,6 +13,8 @@ export interface RadarFormParams {
   autoRelax: boolean;
   userInstruction: string;
   directUrls: string;
+  promptImages: File[];
+  promptText: string;
 }
 
 interface Props {
@@ -43,6 +45,26 @@ export const RadarControls: React.FC<Props> = ({
   submitting,
   onSubmit,
 }) => {
+  const promptImgRef = useRef<HTMLInputElement | null>(null);
+
+  const addPromptImages = (incoming: FileList | null) => {
+    if (!incoming) return;
+    const next = [...params.promptImages];
+    Array.from(incoming).forEach((f) => {
+      if (!next.some((e) => e.name === f.name && e.size === f.size)) {
+        next.push(f);
+      }
+    });
+    onChange({ ...params, promptImages: next.slice(0, 10) });
+  };
+
+  const removePromptImage = (idx: number) => {
+    onChange({
+      ...params,
+      promptImages: params.promptImages.filter((_, i) => i !== idx),
+    });
+  };
+
   const togglePlatform = (id: string) => {
     const exists = params.platforms.includes(id);
     if (exists && params.platforms.length === 1) return;
@@ -67,7 +89,19 @@ export const RadarControls: React.FC<Props> = ({
   return (
     <div className="space-y-4 pt-3 border-t border-slate-800">
       {/* Mode Switch */}
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => onChange({ ...params, mode: "prompt_import" })}
+          className={`flex-1 sm:flex-none px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 border transition ${
+            params.mode === "prompt_import"
+              ? "bg-emerald-500/20 border-emerald-400 text-emerald-200"
+              : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
+          }`}
+        >
+          <ImagePlus className="w-4 h-4" />
+          📋 导入提示词截图 / 文本直出视频（推荐）
+        </button>
         <button
           type="button"
           onClick={() => onChange({ ...params, mode: "direct_urls" })}
@@ -78,7 +112,7 @@ export const RadarControls: React.FC<Props> = ({
           }`}
         >
           <Link2 className="w-4 h-4" />
-          粘贴链接直接拆解（TK / INS / YT 推荐）
+          粘贴链接拆解（TK / INS / YT）
         </button>
         <button
           type="button"
@@ -90,11 +124,89 @@ export const RadarControls: React.FC<Props> = ({
           }`}
         >
           <Radar className="w-4 h-4" />
-          三平台爆款实时搜索
+          三平台爆款搜索
         </button>
       </div>
 
-      {params.mode === "radar" ? (
+      {params.mode === "prompt_import" ? (
+        <div className="space-y-3 bg-emerald-950/15 border border-emerald-500/30 rounded-2xl p-4">
+          <div className="space-y-1.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="block text-xs font-bold text-emerald-200">
+                上传 Codex / 外部工具生成的提示词截图（可一次多选 1~10 张长截图，按顺序上传）
+              </label>
+              <span className="text-[11px] text-emerald-300/90">
+                ✓ 100% 忠实照截图执行，不擅自魔改剧情，直接进入生图 & 可灵视频制作
+              </span>
+            </div>
+
+            <div
+              onClick={() => promptImgRef.current?.click()}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                e.preventDefault();
+                addPromptImages(e.dataTransfer.files);
+              }}
+              className="cursor-pointer px-4 py-4 rounded-xl bg-slate-950/90 border border-dashed border-emerald-500/50 hover:border-emerald-400 text-xs sm:text-sm text-emerald-100 flex flex-col items-center justify-center gap-1.5 transition"
+            >
+              <ImagePlus className="w-5 h-5 text-emerald-400" />
+              <span className="font-semibold">
+                点击多选或拖入提示词截图（支持 PNG / JPG，最多 10 张）
+              </span>
+              <span className="text-[11px] text-slate-400">
+                提示词截图与上方商品图严格分离：上方传商品实拍图，这里传 Codex 提示词截图
+              </span>
+            </div>
+            <input
+              ref={promptImgRef}
+              type="file"
+              multiple
+              accept="image/*"
+              className="hidden"
+              onChange={(e) => {
+                addPromptImages(e.target.files);
+                e.target.value = "";
+              }}
+            />
+
+            {params.promptImages.length > 0 && (
+              <div className="flex flex-wrap gap-2 pt-1.5">
+                {params.promptImages.map((imgFile, idx) => (
+                  <div
+                    key={`${imgFile.name}-${idx}`}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-emerald-500/40 text-xs text-emerald-100"
+                  >
+                    <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold text-[10px]">
+                      截图 {idx + 1}
+                    </span>
+                    <span className="max-w-[160px] truncate">{imgFile.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => removePromptImage(idx)}
+                      className="text-slate-400 hover:text-rose-400"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-1">
+            <label className="block text-xs font-medium text-slate-300">
+              或直接粘贴提示词全文（可选，可单独粘贴文字，也可与上方截图同时使用）
+            </label>
+            <textarea
+              rows={4}
+              value={params.promptText}
+              onChange={(e) => onChange({ ...params, promptText: e.target.value })}
+              placeholder="也可以直接把 Codex 生成的完整提示词（含【产品一致性】【0-3秒】...【统一排除要求】）整段粘贴在这里..."
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 focus:border-emerald-400 focus:outline-none text-xs sm:text-sm text-slate-100 placeholder-slate-500 leading-relaxed"
+            />
+          </div>
+        </div>
+      ) : params.mode === "radar" ? (
         <>
           <div className="flex flex-wrap items-center gap-2">
             <span className="text-xs text-slate-400 mr-1">扫描平台：</span>
@@ -341,14 +453,16 @@ export const RadarControls: React.FC<Props> = ({
         type="button"
         disabled={submitting}
         onClick={onSubmit}
-        className="w-full py-3.5 px-5 rounded-xl bg-gradient-to-r from-sky-500 to-cyan-400 hover:from-sky-400 hover:to-cyan-300 disabled:opacity-60 text-slate-950 font-bold text-sm sm:text-base shadow-lg shadow-sky-500/20 transition flex items-center justify-center gap-2"
+        className="w-full py-3.5 px-5 rounded-xl bg-gradient-to-r from-emerald-500 via-sky-500 to-cyan-400 hover:from-emerald-400 hover:to-cyan-300 disabled:opacity-60 text-slate-950 font-bold text-sm sm:text-base shadow-lg shadow-sky-500/20 transition flex items-center justify-center gap-2"
       >
         <Sparkles className="w-4 h-4" />
         {submitting
-          ? "雷达启动中..."
+          ? "正在启动处理..."
+          : params.mode === "prompt_import"
+          ? "🚀 识别提示词截图，直接进入生图 & 可灵视频制作"
           : params.mode === "radar"
           ? "启动三平台高播高赞扫描雷达"
-          : "开始深度拆解并生成可灵 & ChatGPT 提示词"}
+          : "开始深度拆解并生成完整提示词"}
       </button>
     </div>
   );

@@ -29,6 +29,7 @@ from .prompts import (
     build_deep_analysis_prompt,
     build_preliminary_screening_prompt,
     build_product_dna_prompt,
+    build_prompt_import_prompt,
 )
 from .video_processor import download_and_compress_video, extract_filmstrip_previews
 from .viral_templates import (
@@ -702,6 +703,159 @@ async def run_radar_pipeline(
             status="failed",
             progress_percent=100,
             progress_message=f"扫描异常中断：{exc}",
+            error_message=str(exc),
+            funnel_stats=stats,
+        )
+
+
+async def run_prompt_import_pipeline(
+    *,
+    session_id: str,
+    product_bundle: ParsedProductBundle,
+    prompt_screenshots: list[tuple[bytes, str]],
+    pasted_prompt_text: str,
+    product_name_override: str,
+    settings: Settings | None = None,
+) -> None:
+    """Direct Codex / External Prompt Screenshot Import pipeline:
+    100% faithfully reads uploaded prompt screenshots (and/or text) + multi-angle product photos,
+    builds synced image & Kling prompts, and lands directly in the Studio ready to generate."""
+    cfg = settings or get_settings()
+    ai = UnifiedAIClient(cfg)
+    total_usage = TokenUsage()
+    stats: dict[str, Any] = {
+        "collected": 1,
+        "after_hard_filter": 1,
+        "after_screening": 1,
+        "analyzed": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "estimated_cost_cny": 0.0,
+        "warnings": [],
+    }
+
+    try:
+        pname = product_name_override.strip() or "自定义商品"
+        _update_session(
+            session_id,
+            status="analyzing",
+            progress_percent=25,
+            progress_message=(
+                f"正在高清识别你上传的 {len(prompt_screenshots)} 张提示词截图"
+                f"并结合 {len(product_bundle.ai_images)} 张商品图生成执行脚本..."
+            ),
+            funnel_stats=stats,
+        )
+
+        # Put prompt screenshots FIRST (high priority OCR), then up to 4 multi-angle product photos
+        all_images: list[tuple[bytes, str]] = [
+            *prompt_screenshots[:8],
+            *product_bundle.ai_images[:4],
+        ]
+
+        import_prompt = build_prompt_import_prompt(
+            product_name=pname,
+            product_text=product_bundle.combined_text,
+            pasted_prompt_text=pasted_prompt_text,
+            screenshot_count=min(len(prompt_screenshots), 8),
+            product_photo_count=min(len(product_bundle.ai_images), 4),
+        )
+
+        deep_res, usage = await ai.generate_structured(
+            prompt=import_prompt,
+            schema_cls=VideoDeepAnalysis,
+            tier="deep",
+            images=all_images,
+            mock_context={
+                "product_dna": ProductDNA(
+                    product_name=pname,
+                    physical_form=product_bundle.combined_text[:180] or pname,
+                ),
+                "video_meta": {
+                    "title": f"导入提示词直出 · {pname}",
+                    "original_featured_item": pname,
+                },
+            },
+        )
+        total_usage.add(usage)
+        stats["input_tokens"] = total_usage.input_tokens
+        stats["output_tokens"] = total_usage.output_tokens
+        stats["estimated_cost_cny"] = estimate_cost_cny(
+            total_usage.input_tokens, total_usage.output_tokens, "gpt-4.1"
+        )
+
+        # Guarantee clean fields and locked status so Step 2 generation panel opens immediately!
+        if pasted_prompt_text.strip() and not deep_res.director_plan.current_master_prompt_cn.strip():
+            deep_res.director_plan.current_master_prompt_cn = pasted_prompt_text.strip()
+        if not deep_res.director_plan.original_video_prompt_cn.strip():
+            deep_res.director_plan.original_video_prompt_cn = (
+                deep_res.director_plan.current_master_prompt_cn
+            )
+        deep_res.director_plan.has_user_customized = True
+        deep_res.director_plan.revision_status = "locked"
+
+        resolved_name = (
+            product_name_override.strip()
+            or (deep_res.replaceability.original_featured_item or "").strip()
+            or "自定义商品"
+        )[:60]
+        dna = ProductDNA(
+            product_name=resolved_name,
+            category="提示词导入直出",
+            physical_form=product_bundle.combined_text[:240] or resolved_name,
+        )
+
+        factory = get_session_factory()
+        db = factory()
+        try:
+            record = VideoRecord(
+                session_id=session_id,
+                platform="custom",
+                platform_video_id=f"prompt_{session_id[:8]}",
+                video_url="",
+                download_url=None,
+                cover_url=None,
+                author_name="导入定稿提示词",
+                title=f"📋 提示词截图直出 · {resolved_name}",
+                duration_sec=15,
+                views=0,
+                likes=0,
+                comments=0,
+                shares=0,
+                engagement_rate=0.0,
+                is_ai_generated=True,
+                ai_confidence=100,
+                replaceability_score=99,
+                original_featured_item=resolved_name,
+                analysis_mode="prompt_import",
+                analysis_json=deep_res.model_dump(),
+                token_usage=usage.to_dict(),
+            )
+            db.add(record)
+            db.commit()
+        finally:
+            db.close()
+
+        stats["analyzed"] = 1
+        _update_session(
+            session_id,
+            status="completed",
+            product_name=resolved_name,
+            history_title=format_history_title(resolved_name),
+            product_dna=dna.model_dump(),
+            progress_percent=100,
+            progress_message=(
+                f"提示词识别与拆解完成！共生成 {len(deep_res.storyboard)} 段画面与可灵视频指令，可直接点下方一键生图与制作视频。"
+            ),
+            funnel_stats=stats,
+        )
+    except Exception as exc:
+        logger.exception("Prompt import pipeline crashed for session %s: %s", session_id, exc)
+        _update_session(
+            session_id,
+            status="failed",
+            progress_percent=100,
+            progress_message=f"提示词截图识别失败：{exc}",
             error_message=str(exc),
             funnel_stats=stats,
         )
