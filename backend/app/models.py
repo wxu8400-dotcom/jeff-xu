@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     JSON,
+    LargeBinary,
     String,
     Text,
 )
@@ -98,3 +99,55 @@ class VideoRecord(Base):
     )
 
     session: Mapped[ScanSession] = relationship("ScanSession", back_populates="videos")
+    generated_assets: Mapped[list["GeneratedAsset"]] = relationship(
+        "GeneratedAsset",
+        back_populates="video",
+        cascade="all, delete-orphan",
+        order_by="GeneratedAsset.created_at.desc()",
+    )
+
+
+class GeneratedAsset(Base):
+    __tablename__ = "generated_assets"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    video_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("video_records.id", ondelete="CASCADE"), index=True
+    )
+    session_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("scan_sessions.id", ondelete="CASCADE"), index=True
+    )
+    # image | video_clip | uploaded_clip | final_video
+    asset_type: Mapped[str] = mapped_column(String(24), index=True)
+    slot_index: Mapped[int] = mapped_column(Integer, default=0)
+    shot_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    scene_title: Mapped[str] = mapped_column(String(200), default="")
+
+    provider: Mapped[str] = mapped_column(String(32), default="gemini")
+    model_name: Mapped[str] = mapped_column(String(80), default="")
+    # pending | processing | completed | failed
+    status: Mapped[str] = mapped_column(String(24), default="completed", index=True)
+    prompt_used: Mapped[str] = mapped_column(Text, default="")
+    external_task_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    source_image_asset_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+
+    mime_type: Mapped[str] = mapped_column(String(64), default="image/jpeg")
+    file_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    media_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    duration_sec: Mapped[float | None] = mapped_column(Float, nullable=True)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    video: Mapped[VideoRecord] = relationship(
+        "VideoRecord", back_populates="generated_assets"
+    )

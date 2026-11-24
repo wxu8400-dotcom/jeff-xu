@@ -49,9 +49,26 @@ export const ConfigStatusBadge: React.FC<Props> = ({ config }) => {
           : "SQLite（本地模式）",
     },
     {
-      label: "FFmpeg 视频省 Token 压缩",
+      label: "FFmpeg 视频压缩与一键成片拼接",
       ok: config.ffmpeg_available,
-      detail: config.ffmpeg_available ? "可用（360p/1fps 低耗流）" : "未检测到 FFmpeg",
+      detail: config.ffmpeg_available ? "可用（支持省 Token 压缩 & 9:16 混剪成片）" : "未检测到 FFmpeg",
+    },
+    {
+      label: "V2.0 一键商品生图 (Gemini / GPT)",
+      ok: Boolean(config.gemini_image_configured || config.openai_image_configured),
+      detail: [
+        config.gemini_image_configured ? `Gemini(${config.gemini_image_model || "flash-image"}) ✓` : "Gemini 未配",
+        config.openai_image_configured ? `GPT(${config.openai_image_model || "gpt-image-1"}) ✓` : "GPT 未配",
+      ].join(" · "),
+      optional: true,
+    },
+    {
+      label: "V2.0 可灵 Kling 一键生视频 (可选)",
+      ok: Boolean(config.kling_configured),
+      detail: config.kling_configured
+        ? `已就绪 (${config.kling_model_name || "kling"})`
+        : "未配 Key（仍可用 AI 图转动态 + 实拍免费合成成片）",
+      optional: true,
     },
     {
       label: "公网访问密码锁",

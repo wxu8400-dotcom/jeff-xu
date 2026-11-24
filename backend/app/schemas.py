@@ -62,6 +62,9 @@ class StoryboardShot(BaseModel):
     original_visual: str = ""
     adapted_visual_for_product: str = ""
     audio_sfx: str = ""
+    production_mode: str = "ai"  # "ai" | "real_shoot"
+    real_shoot_guide: str = ""
+    spoken_line: str = ""
 
 
 class ShootingRequirements(BaseModel):
@@ -206,3 +209,89 @@ class ConfigCheckOut(BaseModel):
     ffmpeg_available: bool
     mock_mode: bool
     password_protected: bool
+    # V2.0 One-Click Generation capabilities
+    default_image_provider: Literal["gemini", "openai"] = "gemini"
+    gemini_image_configured: bool = False
+    gemini_image_model: str = "gemini-2.5-flash-image"
+    openai_image_configured: bool = False
+    openai_image_model: str = "gpt-image-1"
+    kling_configured: bool = False
+    kling_model_name: str = "kling-v2-master"
+
+
+class GeneratedAssetOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    video_id: str
+    session_id: str
+    asset_type: str
+    slot_index: int
+    shot_no: int | None = None
+    scene_title: str = ""
+    provider: str = ""
+    model_name: str = ""
+    status: str = "completed"
+    prompt_used: str = ""
+    external_task_id: str | None = None
+    source_image_asset_id: str | None = None
+    mime_type: str = "image/jpeg"
+    file_url: str = ""
+    duration_sec: float | None = None
+    width: int | None = None
+    height: int | None = None
+    error_message: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class StudioStateOut(BaseModel):
+    video_id: str
+    session_id: str
+    product_name: str
+    has_product_reference: bool
+    product_reference_preview: str | None = None
+    default_image_provider: Literal["gemini", "openai"] = "gemini"
+    gemini_image_configured: bool = False
+    openai_image_configured: bool = False
+    kling_configured: bool = False
+    ffmpeg_available: bool = False
+    assets: list[GeneratedAssetOut] = Field(default_factory=list)
+
+
+class GenerateImageRequest(BaseModel):
+    slot_index: int = 0
+    shot_no: int | None = None
+    scene_title: str = ""
+    prompt: str
+    provider: Literal["gemini", "openai"] | None = None
+    aspect_ratio: str = "9:16"
+
+
+class GenerateAllImagesRequest(BaseModel):
+    provider: Literal["gemini", "openai"] | None = None
+    only_missing: bool = True
+    include_real_shoot_shots: bool = True
+    include_poster: bool = True
+
+
+class GenerateVideoClipRequest(BaseModel):
+    slot_index: int = 1
+    shot_no: int = 1
+    scene_title: str = ""
+    source_image_asset_id: str
+    prompt: str
+    negative_prompt: str = ""
+    duration_sec: int = 5
+
+
+class GenerateAllVideosRequest(BaseModel):
+    only_missing: bool = True
+    duration_sec: int = 5
+    include_real_shoot_shots: bool = True
+
+
+class StitchFinalVideoRequest(BaseModel):
+    asset_ids: list[str] = Field(default_factory=list)
+    include_images_as_motion: bool = True
+    image_clip_duration: float = 3.5

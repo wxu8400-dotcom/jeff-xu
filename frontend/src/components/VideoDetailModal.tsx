@@ -10,10 +10,12 @@ import {
   Image as ImageIcon,
   Layers,
   Sparkles,
+  Wand2,
   X,
 } from "lucide-react";
 import type { VideoRecord } from "../types/radar";
 import { copyText, formatCompactNumber } from "../utils/copy";
+import { StudioWorkbench } from "./StudioWorkbench";
 
 interface Props {
   video: VideoRecord;
@@ -21,10 +23,10 @@ interface Props {
   onToast: (msg: string) => void;
 }
 
-type TabKey = "overview" | "storyboard" | "shooting" | "copywriting" | "prompts";
+type TabKey = "studio" | "prompts" | "overview" | "storyboard" | "shooting" | "copywriting";
 
 export const VideoDetailModal: React.FC<Props> = ({ video, onClose, onToast }) => {
-  const [tab, setTab] = useState<TabKey>("prompts");
+  const [tab, setTab] = useState<TabKey>("studio");
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const a = video.analysis_json;
 
@@ -48,10 +50,11 @@ export const VideoDetailModal: React.FC<Props> = ({ video, onClose, onToast }) =
   };
 
   const tabs: { key: TabKey; label: string; icon: React.ReactNode }[] = [
-    { key: "prompts", label: "AI 提示词(可灵/GPT)", icon: <Sparkles className="w-3.5 h-3.5" /> },
-    { key: "overview", label: "替换方案 & 结构", icon: <Layers className="w-3.5 h-3.5" /> },
+    { key: "studio", label: "一键复刻工坊", icon: <Wand2 className="w-3.5 h-3.5" /> },
+    { key: "shooting", label: "实拍分镜清单", icon: <Camera className="w-3.5 h-3.5" /> },
     { key: "storyboard", label: "逐秒分镜表", icon: <Film className="w-3.5 h-3.5" /> },
-    { key: "shooting", label: "拍摄要求", icon: <Camera className="w-3.5 h-3.5" /> },
+    { key: "prompts", label: "原始提示词(备用)", icon: <Sparkles className="w-3.5 h-3.5" /> },
+    { key: "overview", label: "替换方案 & 结构", icon: <Layers className="w-3.5 h-3.5" /> },
     { key: "copywriting", label: "视频文案", icon: <FileText className="w-3.5 h-3.5" /> },
   ];
 
@@ -121,6 +124,8 @@ export const VideoDetailModal: React.FC<Props> = ({ video, onClose, onToast }) =
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-5">
+          {tab === "studio" && <StudioWorkbench video={video} onToast={onToast} />}
+
           {tab === "prompts" && (
             <>
               {/* Section A: ChatGPT Images */}
@@ -366,22 +371,75 @@ export const VideoDetailModal: React.FC<Props> = ({ video, onClose, onToast }) =
           )}
 
           {tab === "shooting" && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-              {[
-                { label: "灯光与布光要求", val: a?.shooting_requirements?.lighting },
-                { label: "机位与拍摄参数", val: a?.shooting_requirements?.camera_setup },
-                { label: "场景与道具清单", val: a?.shooting_requirements?.props_and_scene },
-                { label: "剪辑节奏与转场", val: a?.shooting_requirements?.editing_rhythm },
-                { label: "BGM 风格与卡点", val: a?.shooting_requirements?.bgm_style },
-              ].map((item) => (
-                <div
-                  key={item.label}
-                  className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-1.5"
-                >
-                  <div className="text-sky-300 font-semibold">{item.label}</div>
-                  <div className="text-slate-200 leading-relaxed">{item.val || "—"}</div>
+            <div className="space-y-4 text-xs">
+              {/* Dedicated Shot-by-Shot Smartphone Filming Guide */}
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h3 className="text-sm font-bold text-amber-300 flex items-center gap-1.5">
+                    <Camera className="w-4 h-4" />
+                    实拍分镜执行清单（手机边看边拍；若不想实拍，可在「一键复刻工坊」切全片 AI 生成）
+                  </h3>
                 </div>
-              ))}
+                <div className="space-y-2.5">
+                  {(a?.storyboard || []).map((shot) => {
+                    const isReal = shot.production_mode === "real_shoot";
+                    return (
+                      <div
+                        key={shot.shot_no}
+                        className={`rounded-xl p-3 border space-y-1.5 ${
+                          isReal
+                            ? "bg-slate-950 border-amber-500/40"
+                            : "bg-slate-950/60 border-slate-800"
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 font-bold">
+                            分镜 {shot.shot_no}
+                          </span>
+                          <span className="font-mono text-slate-300">{shot.time_range}</span>
+                          <span
+                            className={`px-2 py-0.5 rounded text-[11px] font-semibold ${
+                              isReal
+                                ? "bg-amber-500/20 text-amber-300"
+                                : "bg-purple-500/20 text-purple-200"
+                            }`}
+                          >
+                            {isReal ? "📱 建议手机实拍（也可选 AI 生成）" : "🤖 推荐 AI 一键生成（附实拍备选）"}
+                          </span>
+                        </div>
+                        <div className="text-slate-100 leading-relaxed">
+                          <span className="text-amber-300 font-semibold">拍摄动作：</span>
+                          {shot.real_shoot_guide ||
+                            `${shot.shot_size} / ${shot.camera_movement} — ${shot.adapted_visual_for_product}`}
+                        </div>
+                        {shot.spoken_line && (
+                          <div className="text-sky-200">
+                            <span className="text-slate-400">口播台词：</span>「{shot.spoken_line}」
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {[
+                  { label: "灯光与布光要求", val: a?.shooting_requirements?.lighting },
+                  { label: "机位与拍摄参数", val: a?.shooting_requirements?.camera_setup },
+                  { label: "场景与道具清单", val: a?.shooting_requirements?.props_and_scene },
+                  { label: "剪辑节奏与转场", val: a?.shooting_requirements?.editing_rhythm },
+                  { label: "BGM 风格与卡点", val: a?.shooting_requirements?.bgm_style },
+                ].map((item) => (
+                  <div
+                    key={item.label}
+                    className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-1.5"
+                  >
+                    <div className="text-sky-300 font-semibold">{item.label}</div>
+                    <div className="text-slate-200 leading-relaxed">{item.val || "—"}</div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

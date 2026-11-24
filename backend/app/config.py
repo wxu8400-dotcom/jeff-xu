@@ -49,8 +49,54 @@ class Settings(BaseSettings):
     openai_fast_model: str = Field(default="gpt-4o-mini", alias="OPENAI_FAST_MODEL")
     openai_deep_model: str = Field(default="gpt-4o", alias="OPENAI_DEEP_MODEL")
 
+    # V2.0 One-Click Image Generation (Gemini native image & OpenAI gpt-image-1)
+    default_image_provider: Literal["gemini", "openai"] = Field(
+        default="gemini", alias="IMAGE_PROVIDER"
+    )
+    gemini_image_model: str = Field(
+        default="gemini-2.5-flash-image", alias="GEMINI_IMAGE_MODEL"
+    )
+    openai_image_api_key: str = Field(default="", alias="OPENAI_IMAGE_API_KEY")
+    openai_image_base_url: str = Field(default="", alias="OPENAI_IMAGE_BASE_URL")
+    openai_image_model: str = Field(
+        default="gpt-image-1", alias="OPENAI_IMAGE_MODEL"
+    )
+
+    # V2.0 One-Click Video Generation (Kling AI official AK/SK JWT or relay Bearer key)
+    kling_api_base_url: str = Field(
+        default="https://api-beijing.klingai.com", alias="KLING_API_BASE_URL"
+    )
+    kling_access_key: str = Field(default="", alias="KLING_ACCESS_KEY")
+    kling_secret_key: str = Field(default="", alias="KLING_SECRET_KEY")
+    kling_api_key: str = Field(default="", alias="KLING_API_KEY")
+    kling_model_name: str = Field(
+        default="kling-v2-master", alias="KLING_MODEL_NAME"
+    )
+    kling_mode: str = Field(default="std", alias="KLING_MODE")
+
     enable_mock_mode: bool = Field(default=False, alias="ENABLE_MOCK_MODE")
     max_upload_mb: int = Field(default=60, alias="MAX_UPLOAD_MB")
+
+    def gemini_image_configured(self) -> bool:
+        return self.enable_mock_mode or bool(self.gemini_api_key.strip())
+
+    def openai_image_configured(self) -> bool:
+        return self.enable_mock_mode or bool(
+            (self.openai_image_api_key or self.openai_api_key).strip()
+        )
+
+    def kling_configured(self) -> bool:
+        if self.enable_mock_mode:
+            return True
+        if self.kling_api_key.strip():
+            return True
+        return bool(self.kling_access_key.strip() and self.kling_secret_key.strip())
+
+    def resolved_openai_image_key(self) -> str:
+        return (self.openai_image_api_key or self.openai_api_key).strip()
+
+    def resolved_openai_image_base_url(self) -> str:
+        return (self.openai_image_base_url or self.openai_base_url).strip().rstrip("/")
 
     def resolved_session_secret(self) -> str:
         if self.app_session_secret.strip():

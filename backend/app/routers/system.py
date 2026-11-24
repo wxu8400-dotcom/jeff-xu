@@ -47,4 +47,11 @@ def config_check() -> ConfigCheckOut:
         ffmpeg_available=is_ffmpeg_available(),
         mock_mode=cfg.enable_mock_mode,
         password_protected=bool(cfg.app_access_password.strip()),
+        default_image_provider=cfg.default_image_provider,
+        gemini_image_configured=cfg.gemini_image_configured(),
+        gemini_image_model=cfg.gemini_image_model,
+        openai_image_configured=cfg.openai_image_configured(),
+        openai_image_model=cfg.openai_image_model,
+        kling_configured=cfg.kling_configured(),
+        kling_model_name=cfg.kling_model_name,
     )

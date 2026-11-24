@@ -167,6 +167,11 @@ def build_deep_analysis_prompt(
    - 面向可灵 Kling 图生视频 (I2V) / 首尾帧工作流；
    - `prompt_cn` 与 `prompt_en` 遵循可灵高出片公式：**主体与产品细节 + 流畅真实的物理动作/光影动态 + 明确运镜指令（如缓慢推进/环绕/俯拍拉远） + 氛围与电影级质感**；避免让视频模型生成文字；
    - 给出具体的 `recommended_params`（时长 5s/10s、画质模式、运镜建议、创意相关性）与防变形 `negative_prompt`。
+6. **智能区分「AI 一键生成」与「手机实拍」分镜**（极其重要！）：
+   - 在 `storyboard` 的每个镜头里必须标明 `production_mode`：
+     - `"ai"`：适合用 AI 图生图 + 图生视频一键直出（如 FOOH 户外巨物、3D 悬浮、微缩世界、特效转场、高质感空镜海报）；
+     - `"real_shoot"`：建议用户直接拿手机 10 秒实拍更真实、转化更高（如真实手持展示、通电亮灯测试、真实安装对比、细节手感特写）；
+   - 并给出接地气的大白话 `real_shoot_guide`（机位放哪、怎么拿产品、光线与道具、拍几秒）和 `spoken_line`（该镜头对应的简短口播/字幕句）。
 
 请严格输出纯 JSON（不含 markdown 代码块标记以外的文字），字段结构必须与下方完全一致：
 {{
@@ -194,7 +199,10 @@ def build_deep_analysis_prompt(
       "camera_movement": "快速推镜",
       "original_visual": "原视频该镜头画面内容",
       "adapted_visual_for_product": "替换为目标产品后的精准分镜画面",
-      "audio_sfx": "人声/音效/BGM变化"
+      "audio_sfx": "人声/音效/BGM变化",
+      "production_mode": "ai",
+      "real_shoot_guide": "手机竖屏 2x 焦段对准桌面中央产品，从距产品 40cm 匀速前推至 15cm，拍 3 秒即可",
+      "spoken_line": "别划走，这个细节你一定没见过！"
     }}
   ],
   "shooting_requirements": {{

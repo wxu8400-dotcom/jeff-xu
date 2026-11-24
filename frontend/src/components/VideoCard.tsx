@@ -128,7 +128,7 @@ export const VideoCard: React.FC<Props> = ({ video, onOpenDetail }) => {
             className="flex-1 py-2.5 px-3 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-semibold text-xs flex items-center justify-center gap-1.5 transition"
           >
             <Sparkles className="w-3.5 h-3.5" />
-            拆解 & 提示词
+            一键复刻 / 拆解
           </button>
           <a
             href={video.video_url}

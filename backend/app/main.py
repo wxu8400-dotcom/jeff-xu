@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import PROJECT_ROOT
 from .database import init_db
-from .routers import auth, scans, system
+from .routers import auth, scans, studio, system
 
 logging.basicConfig(
     level=logging.INFO,
@@ -45,6 +45,7 @@ def create_app() -> FastAPI:
     app.include_router(system.router)
     app.include_router(auth.router)
     app.include_router(scans.router)
+    app.include_router(studio.router)
 
     if FRONTEND_DIST.exists() and (FRONTEND_DIST / "index.html").exists():
         assets_dir = FRONTEND_DIST / "assets"

@@ -62,6 +62,9 @@ export interface StoryboardShot {
   original_visual: string;
   adapted_visual_for_product: string;
   audio_sfx: string;
+  production_mode?: "ai" | "real_shoot" | string;
+  real_shoot_guide?: string;
+  spoken_line?: string;
 }
 
 export interface ShootingRequirements {
@@ -190,6 +193,51 @@ export interface ConfigCheck {
   ffmpeg_available: boolean;
   mock_mode: boolean;
   password_protected: boolean;
+  default_image_provider?: "gemini" | "openai";
+  gemini_image_configured?: boolean;
+  gemini_image_model?: string;
+  openai_image_configured?: boolean;
+  openai_image_model?: string;
+  kling_configured?: boolean;
+  kling_model_name?: string;
+}
+
+export interface GeneratedAsset {
+  id: string;
+  video_id: string;
+  session_id: string;
+  asset_type: "image" | "video_clip" | "uploaded_clip" | "final_video" | string;
+  slot_index: number;
+  shot_no?: number | null;
+  scene_title: string;
+  provider: string;
+  model_name: string;
+  status: "pending" | "processing" | "completed" | "failed" | string;
+  prompt_used: string;
+  external_task_id?: string | null;
+  source_image_asset_id?: string | null;
+  mime_type: string;
+  file_url: string;
+  duration_sec?: number | null;
+  width?: number | null;
+  height?: number | null;
+  error_message?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface StudioState {
+  video_id: string;
+  session_id: string;
+  product_name: string;
+  has_product_reference: boolean;
+  product_reference_preview?: string | null;
+  default_image_provider: "gemini" | "openai";
+  gemini_image_configured: boolean;
+  openai_image_configured: boolean;
+  kling_configured: boolean;
+  ffmpeg_available: boolean;
+  assets: GeneratedAsset[];
 }
 
 export interface ScanProgressEvent {

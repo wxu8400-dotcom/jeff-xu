@@ -463,6 +463,9 @@ class UnifiedAIClient:
                         original_visual="原单品在强光下破雾而出，伴随清脆开启音效",
                         adapted_visual_for_product=f"【{pname}】置于冷暖撞色光影台面中央，镜头快速推进聚焦其磨砂机身质感与核心功能细节，瞬间吸睛",
                         audio_sfx="清脆“咔哒”启动声 + 低频重音卡点",
+                        production_mode="ai",
+                        real_shoot_guide=f"若改为实拍：将【{pname}】摆在深色桌面上，手机开 2x 焦段从 35cm 匀速前推至 12cm，拍 3 秒。",
+                        spoken_line="别划走！3秒让你看懂什么叫降维打击！",
                     ),
                     StoryboardShot(
                         shot_no=2,
@@ -472,6 +475,9 @@ class UnifiedAIClient:
                         original_visual="单手握持演示核心功能，画面干净无杂物",
                         adapted_visual_for_product=f"一只干净自然的手稳稳握持【{pname}】在日常高频场景中启动演示，直观呈现「{dna.core_selling_points[0] if dna.core_selling_points else '核心卖点'}」",
                         audio_sfx="节奏感轻快英文/电子鼓点 BGM 切入",
+                        production_mode="real_shoot",
+                        real_shoot_guide=f"📱 手机竖屏固定在桌面支架或单手握持，45° 侧自然光，真实单手拿起【{pname}】按下开关并展示效果，拍 5~6 秒即可。",
+                        spoken_line=f"每天最烦人的痛点，用这个【{pname}】一按直接搞定。",
                     ),
                     StoryboardShot(
                         shot_no=3,
@@ -481,6 +487,9 @@ class UnifiedAIClient:
                         original_visual="使用前烦躁痛点 vs 使用后轻松愉悦的强反差",
                         adapted_visual_for_product=f"对比展示没有【{pname}】时的困扰，切到使用【{pname}】后的清爽高效状态，突出便携与高颜值属性",
                         audio_sfx="转场“嗖”音效 + 人声高潮金句",
+                        production_mode="real_shoot",
+                        real_shoot_guide=f"📱 同一个机位固定不动拍两段各 3 秒：先拍没放【{pname}】的普通画面，再把【{pname}】放上去并点亮/启动，剪辑一秒硬切反差拉满。",
+                        spoken_line="前后对比太离谱了，难怪全网都在抢！",
                     ),
                     StoryboardShot(
                         shot_no=4,
@@ -490,6 +499,9 @@ class UnifiedAIClient:
                         original_visual="产品精致摆放，四周虚化光斑收尾",
                         adapted_visual_for_product=f"【{pname}】精致陈列在桌面美学场景中，柔光勾勒轮廓，背景呈现高级奶油虚化光斑，预留底部字幕与行动引导区",
                         audio_sfx="BGM 干净收尾 + 轻柔提示音",
+                        production_mode="ai",
+                        real_shoot_guide=f"若改为实拍：将【{pname}】放在窗边桌面，手机缓慢向右弧形绕拍 30 度，拍 4 秒定格。",
+                        spoken_line="想要同款直接看下方，用过一次真的回不去。",
                     ),
                 ],
                 shooting_requirements=ShootingRequirements(
