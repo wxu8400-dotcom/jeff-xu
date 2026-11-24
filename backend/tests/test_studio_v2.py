@@ -194,10 +194,18 @@ def _run_v2_studio_pipeline_assertions(client):
         assert up_resp.status_code == 200
         assert up_resp.json()["asset_type"] == "uploaded_clip"
 
-        # 7. Stitch final 9:16 MP4 combining Kling AI clip (shot 1) + uploaded real clip (shot 2) + AI motion images (shots 3 & 4)
+        # 7. Stitch final 9:16 MP4 WITH free AI voiceover + built-in BGM!
         stitch_resp = client.post(
             f"/api/studio/videos/{video_id}/stitch-final",
-            json={"include_images_as_motion": True, "image_clip_duration": 2.0},
+            json={
+                "include_images_as_motion": True,
+                "image_clip_duration": 2.0,
+                "enable_voiceover": True,
+                "voiceover_text": "这款 LED 线性灯亮度高颜值强，直接提升空间高级感！",
+                "voiceover_voice": "zh-CN-YunxiNeural",
+                "bgm_mode": "upbeat_pulse",
+                "bgm_volume": 0.2,
+            },
         )
         assert stitch_resp.status_code == 200
         final_asset = stitch_resp.json()
@@ -207,8 +215,23 @@ def _run_v2_studio_pipeline_assertions(client):
         assert "分镜1(可灵AI)" in final_asset["prompt_used"]
         assert "分镜2(实拍)" in final_asset["prompt_used"]
         assert "分镜3(AI图转动态)" in final_asset["prompt_used"]
+        assert "AI配音" in final_asset["prompt_used"]
+        assert "内置商业轻节奏BGM" in final_asset["prompt_used"]
 
+        # Verify HTTP 206 Partial Content Range streaming (required by Safari/Chrome <video>!)
+        range_resp = client.get(
+            final_asset["file_url"],
+            headers={"Range": "bytes=0-1023"},
+        )
+        assert range_resp.status_code == 206
+        assert range_resp.headers["accept-ranges"] == "bytes"
+        assert range_resp.headers["content-range"].startswith("bytes 0-1023/")
+        assert len(range_resp.content) == 1024
+
+        # Verify full attachment download with RFC 6266 ASCII + UTF-8 filename
         mp4_dl = client.get(f"{final_asset['file_url']}?download=1")
         assert mp4_dl.status_code == 200
         assert mp4_dl.headers["content-type"] == "video/mp4"
+        assert 'filename="viral-radar-' in mp4_dl.headers["content-disposition"]
+        assert "filename*=UTF-8''" in mp4_dl.headers["content-disposition"]
         assert len(mp4_dl.content) > 5000

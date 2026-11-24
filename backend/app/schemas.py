@@ -216,7 +216,7 @@ class ConfigCheckOut(BaseModel):
     openai_image_configured: bool = False
     openai_image_model: str = "gpt-image-2.6-sunburst"
     kling_configured: bool = False
-    kling_model_name: str = "kling-v3"
+    kling_model_name: str = "kling-v2-5-turbo"
 
 
 class GeneratedAssetOut(BaseModel):
@@ -286,6 +286,7 @@ class GenerateVideoClipRequest(BaseModel):
     negative_prompt: str = ""
     duration_sec: int = 5
     model_override: str = ""
+    enable_sound: bool = False
 
 
 class GenerateAllVideosRequest(BaseModel):
@@ -293,9 +294,16 @@ class GenerateAllVideosRequest(BaseModel):
     duration_sec: int = 5
     include_real_shoot_shots: bool = True
     model_override: str = ""
+    enable_sound: bool = False
 
 
 class StitchFinalVideoRequest(BaseModel):
     asset_ids: list[str] = Field(default_factory=list)
     include_images_as_motion: bool = True
     image_clip_duration: float = 3.5
+    enable_voiceover: bool = False
+    voiceover_text: str = ""
+    voiceover_voice: str = "zh-CN-YunxiNeural"
+    bgm_mode: Literal["none", "ambient_chill", "upbeat_pulse", "custom"] = "none"
+    bgm_asset_id: str = ""
+    bgm_volume: float = 0.20

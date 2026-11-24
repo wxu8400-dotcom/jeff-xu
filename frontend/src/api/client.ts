@@ -138,6 +138,7 @@ export const api = {
       negative_prompt?: string;
       duration_sec?: number;
       model_override?: string;
+      enable_sound?: boolean;
     }
   ) =>
     apiFetch<GeneratedAsset>(
@@ -156,6 +157,7 @@ export const api = {
       duration_sec?: number;
       include_real_shoot_shots?: boolean;
       model_override?: string;
+      enable_sound?: boolean;
     }
   ) =>
     apiFetch<GeneratedAsset[]>(
@@ -183,12 +185,27 @@ export const api = {
     );
   },
 
+  uploadCustomBgm: (videoId: string, file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return apiFetch<GeneratedAsset>(
+      `/api/studio/videos/${encodeURIComponent(videoId)}/upload-bgm`,
+      { method: "POST", body: fd }
+    );
+  },
+
   stitchFinalVideo: (
     videoId: string,
     payload: {
       asset_ids?: string[];
       include_images_as_motion?: boolean;
       image_clip_duration?: number;
+      enable_voiceover?: boolean;
+      voiceover_text?: string;
+      voiceover_voice?: string;
+      bgm_mode?: "none" | "ambient_chill" | "upbeat_pulse" | "custom";
+      bgm_asset_id?: string;
+      bgm_volume?: number;
     }
   ) =>
     apiFetch<GeneratedAsset>(

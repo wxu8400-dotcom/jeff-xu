@@ -403,17 +403,33 @@ async def _generate_image_openai(
     size = "1024x1536" if aspect_ratio == "9:16" else ("1536x1024" if aspect_ratio == "16:9" else "1024x1024")
     headers = {"Authorization": f"Bearer {api_key}"}
 
-    # Prioritize latest GPT Image 2.6 (sunburst / flare) -> gpt-image-2 -> earlier fallback
+    # Respect user-picked budget or flagship model first, then safe fallbacks
     model_chain: list[str] = []
-    for m in (
-        model_override.strip(),
-        cfg.openai_image_model,
-        "gpt-image-2.6-sunburst",
-        "gpt-image-2.6-flare",
-        "gpt-image-2",
-        "gpt-image-1.5",
-        "gpt-image-1",
-    ):
+    req_model = model_override.strip()
+    if req_model == "seedream-4.5":
+        preferred = [
+            "seedream-4.5",
+            "doubao-seedream-5-0-flash-260915",
+            "seedream-v4",
+            "gpt-image-2.6-flare",
+        ]
+    elif req_model == "gemini-2.5-flash-image":
+        preferred = [
+            "gemini-2.5-flash-image",
+            "gemini-2.5-flash-image-preview",
+            "gpt-image-2.6-flare",
+        ]
+    else:
+        preferred = [
+            req_model,
+            cfg.openai_image_model,
+            "gpt-image-2.6-flare",
+            "gpt-image-2.6-sunburst",
+            "gpt-image-2",
+            "gpt-image-1.5",
+            "gpt-image-1",
+        ]
+    for m in preferred:
         if m and m not in model_chain:
             model_chain.append(m)
 
@@ -628,6 +644,7 @@ async def generate_kling_video_clip(
     negative_prompt: str = "",
     duration_sec: int = 5,
     model_override: str = "",
+    enable_sound: bool = False,
     settings: Settings | None = None,
 ) -> GeneratedVideoResult:
     """Generate a 5s/10s vertical I2V video clip via Kling AI (302.ai relay or official API),
@@ -647,7 +664,7 @@ async def generate_kling_video_clip(
             mime_type="video/mp4",
             duration_sec=3.0,
             provider="kling",
-            model_name=model_override.strip() or "mock-kling-v3",
+            model_name=model_override.strip() or "mock-kling-v2-5-turbo",
             external_task_id="mock-task-001",
         )
 
@@ -662,9 +679,9 @@ async def generate_kling_video_clip(
     for m in (
         model_override.strip(),
         cfg.kling_model_name.strip(),
-        "kling-v3",
-        "kling-v2-6",
         "kling-v2-5-turbo",
+        "kling-v2-6",
+        "kling-v3",
         "kling-v2-1",
         "kling-v2-master",
         "kling-v1-6",
@@ -701,6 +718,8 @@ async def generate_kling_video_clip(
                         "prompt": prompt[:2400],
                         "cfg_scale": 0.5,
                     }
+                    if enable_sound and any(k in candidate_model for k in ("v2-6", "v3", "4.0", "o3")):
+                        body["sound"] = "on"
                     if negative_prompt.strip():
                         body["negative_prompt"] = negative_prompt.strip()[:1000]
 

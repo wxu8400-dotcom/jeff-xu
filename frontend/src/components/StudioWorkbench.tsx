@@ -8,10 +8,12 @@ import {
   Film,
   Image as ImageIcon,
   Loader2,
+  Music,
   RefreshCw,
   Sparkles,
   Trash2,
   Upload,
+  Volume2,
   Wand2,
   X,
 } from "lucide-react";
@@ -43,8 +45,21 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
   const [globalMode, setGlobalMode] = useState<GlobalMode>("all_ai");
   const [shotModeOverrides, setShotModeOverrides] = useState<Record<number, "ai" | "real_shoot">>({});
   const [imageProvider, setImageProvider] = useState<"gemini" | "openai">("gemini");
-  const [openaiModel, setOpenaiModel] = useState<string>("gpt-image-2.6-sunburst");
-  const [klingModel, setKlingModel] = useState<string>("kling-v3");
+  const [openaiModel, setOpenaiModel] = useState<string>("seedream-4.5");
+  const [klingModel, setKlingModel] = useState<string>("kling-v2-5-turbo");
+  const [enableKlingSound, setEnableKlingSound] = useState<boolean>(false);
+
+  // Free Audio Mixing State (AI Voiceover + BGM)
+  const [enableVoiceover, setEnableVoiceover] = useState<boolean>(true);
+  const [voiceoverVoice, setVoiceoverVoice] = useState<string>("zh-CN-YunxiNeural");
+  const [voiceoverText, setVoiceoverText] = useState<string>(
+    () => video.analysis_json?.copywriting?.adapted_script_cn || ""
+  );
+  const [showVoiceEditor, setShowVoiceEditor] = useState<boolean>(false);
+  const [bgmMode, setBgmMode] = useState<"none" | "ambient_chill" | "upbeat_pulse" | "custom">(
+    "upbeat_pulse"
+  );
+  const [bgmUploadBusy, setBgmUploadBusy] = useState<boolean>(false);
   const [checkedRealShots, setCheckedRealShots] = useState<Record<number, boolean>>({});
   const [editedPrompts, setEditedPrompts] = useState<Record<number, string>>({});
   const [editingSlot, setEditingSlot] = useState<number | null>(null);
@@ -103,11 +118,12 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
   }, [hasProcessing, loadState]);
 
   // Build latest asset lookup maps per slot / shot
-  const { latestImageBySlot, latestVideoByShot, latestUploadByShot, finalVideos } = useMemo(() => {
+  const { latestImageBySlot, latestVideoByShot, latestUploadByShot, finalVideos, customBgm } = useMemo(() => {
     const imgMap: Record<number, GeneratedAsset> = {};
     const vidMap: Record<number, GeneratedAsset> = {};
     const upMap: Record<number, GeneratedAsset> = {};
     const finals: GeneratedAsset[] = [];
+    let bgm: GeneratedAsset | null = null;
 
     for (const item of studio?.assets || []) {
       if (item.asset_type === "image") {
@@ -118,6 +134,8 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
         if (!upMap[item.shot_no]) upMap[item.shot_no] = item;
       } else if (item.asset_type === "final_video" && item.status === "completed") {
         finals.push(item);
+      } else if (item.asset_type === "bgm_audio" && item.status === "completed") {
+        if (!bgm) bgm = item;
       }
     }
     return {
@@ -125,6 +143,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
       latestVideoByShot: vidMap,
       latestUploadByShot: upMap,
       finalVideos: finals,
+      customBgm: bgm,
     };
   }, [studio]);
 
@@ -251,6 +270,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
         negative_prompt: kp.negative,
         duration_sec: 5,
         model_override: klingModel,
+        enable_sound: enableKlingSound,
       });
       onToast(`分镜 ${shot.shot_no} 已提交可灵 AI 生成，完成后自动显示`);
       await loadState(true);
@@ -269,6 +289,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
         duration_sec: 5,
         include_real_shoot_shots: globalMode === "all_ai",
         model_override: klingModel,
+        enable_sound: enableKlingSound,
       });
       onToast(`已提交 ${created.length} 个分镜至可灵 AI 生成视频，请稍候...`);
       await loadState(true);
@@ -296,6 +317,31 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
       onToast(err instanceof Error ? err.message : "上传实拍视频失败");
     } finally {
       setBusySlots((prev) => ({ ...prev, [key]: false }));
+    }
+  };
+
+  const handleUploadBgm = async (file: File) => {
+    setBgmUploadBusy(true);
+    try {
+      await api.uploadCustomBgm(video.id, file);
+      setBgmMode("custom");
+      onToast(`已上传自定义 BGM：${file.name}`);
+      await loadState(true);
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : "上传 BGM 失败");
+    } finally {
+      setBgmUploadBusy(false);
+    }
+  };
+
+  const handleVoiceChange = (nextVoice: string) => {
+    setVoiceoverVoice(nextVoice);
+    const copy = video.analysis_json?.copywriting;
+    if (!copy) return;
+    if (nextVoice.startsWith("en-") && copy.adapted_script_en) {
+      setVoiceoverText(copy.adapted_script_en);
+    } else if (nextVoice.startsWith("zh-") && copy.adapted_script_cn) {
+      setVoiceoverText(copy.adapted_script_cn);
     }
   };
 
@@ -330,8 +376,14 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
         asset_ids: orderedIds,
         include_images_as_motion: true,
         image_clip_duration: 3.5,
+        enable_voiceover: enableVoiceover,
+        voiceover_text: voiceoverText,
+        voiceover_voice: voiceoverVoice,
+        bgm_mode: bgmMode,
+        bgm_asset_id: bgmMode === "custom" ? customBgm?.id || "" : "",
+        bgm_volume: 0.2,
       });
-      onToast("🎉 9:16 复刻成片已合成完毕，可直接播放或下载 MP4！");
+      onToast("🎉 有声 9:16 复刻成片已合成完毕，可直接播放或下载 MP4！");
       await loadState(true);
     } catch (err) {
       onToast(err instanceof Error ? err.message : "成片合成失败");
@@ -513,7 +565,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
                 }`}
               >
                 <div className="text-xs font-bold flex items-center justify-between">
-                  <span>GPT Image 2.6</span>
+                  <span>302.ai / GPT 生图</span>
                   <span
                     className={`text-[10px] px-1.5 py-0.5 rounded ${
                       studio.openai_image_configured
@@ -524,16 +576,17 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
                     {studio.openai_image_configured ? "已就绪" : "需配 Key"}
                   </span>
                 </div>
-                <div className="text-[11px] opacity-80 mt-0.5">Sunburst / Flare 最新旗舰</div>
+                <div className="text-[11px] opacity-80 mt-0.5">Seedream / Nano Banana / GPT 2.6</div>
               </button>
             </div>
             {imageProvider === "openai" && (
               <div className="flex flex-wrap items-center gap-1.5 pt-1">
-                <span className="text-[11px] text-slate-400">模型版本：</span>
+                <span className="text-[11px] text-slate-400">生图档位：</span>
                 {[
-                  { id: "gpt-image-2.6-sunburst", label: "2.6 Sunburst（最高画质）" },
-                  { id: "gpt-image-2.6-flare", label: "2.6 Flare（6秒极速）" },
-                  { id: "gpt-image-2", label: "GPT Image 2" },
+                  { id: "seedream-4.5", label: "Seedream 4.5（省钱 ~¥0.15）" },
+                  { id: "gemini-2.5-flash-image", label: "Nano Banana（性价比 ~¥0.28）" },
+                  { id: "gpt-image-2.6-flare", label: "GPT 2.6 Flare（6秒极速）" },
+                  { id: "gpt-image-2.6-sunburst", label: "GPT 2.6 Sunburst（顶配高精）" },
                 ].map((m) => (
                   <button
                     key={m.id}
@@ -553,15 +606,110 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
           </div>
         </div>
 
+        {/* Audio & Sound Panel (100% Free AI Voiceover + BGM) */}
+        <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-3 space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
+              <Volume2 className="w-4 h-4" />
+              成片配音 & BGM（0 元免费合成，自动混入第 3 步 MP4）
+            </span>
+            <button
+              type="button"
+              onClick={() => setShowVoiceEditor((v) => !v)}
+              className="text-[11px] text-sky-400 hover:text-sky-300"
+            >
+              {showVoiceEditor ? "收起口播台词" : "查看 / 修改配音台词"}
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 text-xs">
+            {/* Free AI Voiceover Controls */}
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="inline-flex items-center gap-1.5 text-slate-200 cursor-pointer shrink-0">
+                <input
+                  type="checkbox"
+                  checked={enableVoiceover}
+                  onChange={(e) => setEnableVoiceover(e.target.checked)}
+                  className="rounded border-slate-600 bg-slate-950 text-emerald-500"
+                />
+                免费 AI 真人配音
+              </label>
+              {enableVoiceover && (
+                <select
+                  value={voiceoverVoice}
+                  onChange={(e) => handleVoiceChange(e.target.value)}
+                  className="flex-1 min-w-[160px] px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-[11px] text-slate-100"
+                >
+                  <option value="zh-CN-YunxiNeural">中文活力男声（种草推荐）</option>
+                  <option value="zh-CN-XiaoxiaoNeural">中文自然女声（亲切推荐）</option>
+                  <option value="zh-CN-YunjianNeural">中文磁性男声（商业大片）</option>
+                  <option value="en-US-AndrewNeural">英文自然男声（出海推荐）</option>
+                  <option value="en-US-AvaNeural">英文爆款女声（TikTok/INS）</option>
+                </select>
+              )}
+            </div>
+
+            {/* BGM Controls */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-slate-300 inline-flex items-center gap-1 shrink-0">
+                <Music className="w-3.5 h-3.5 text-pink-400" />
+                BGM：
+              </span>
+              <select
+                value={bgmMode}
+                onChange={(e) =>
+                  setBgmMode(e.target.value as "none" | "ambient_chill" | "upbeat_pulse" | "custom")
+                }
+                className="flex-1 min-w-[140px] px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-[11px] text-slate-100"
+              >
+                <option value="upbeat_pulse">内置商业轻节奏（免费）</option>
+                <option value="ambient_chill">内置高级极简氛围（免费）</option>
+                {customBgm && (
+                  <option value="custom">已上传：{customBgm.scene_title.slice(0, 18)}</option>
+                )}
+                <option value="none">不加背景音乐</option>
+              </select>
+              <label className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-[11px] inline-flex items-center gap-1 cursor-pointer shrink-0">
+                {bgmUploadBusy ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <Upload className="w-3 h-3 text-pink-400" />
+                )}
+                传 MP3
+                <input
+                  type="file"
+                  accept="audio/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handleUploadBgm(f);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+            </div>
+          </div>
+
+          {showVoiceEditor && (
+            <textarea
+              rows={2}
+              value={voiceoverText}
+              onChange={(e) => setVoiceoverText(e.target.value)}
+              placeholder="输入或修改配音口播文案（留空则自动使用本视频改写好的口播脚本）"
+              className="w-full p-2 rounded-lg bg-slate-950 border border-slate-700 text-xs text-slate-200"
+            />
+          )}
+        </div>
+
         {/* One-Click Batch Action Bar */}
         <div className="space-y-2.5 pt-2 border-t border-slate-800/80">
           {studio.kling_configured && (
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-[11px] text-slate-400">可灵视频模型：</span>
               {[
-                { id: "kling-v3", label: "Kling 3.0（最新旗舰）" },
+                { id: "kling-v2-5-turbo", label: "Kling 2.5 Turbo（省钱推荐 ~¥1.4）" },
                 { id: "kling-v2-6", label: "Kling 2.6" },
-                { id: "kling-v2-5-turbo", label: "Kling 2.5 Turbo（极速省钱）" },
+                { id: "kling-v3", label: "Kling 3.0（顶配旗舰）" },
                 { id: "kling-v2-1", label: "Kling 2.1" },
               ].map((km) => (
                 <button
@@ -577,6 +725,17 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
                   {km.label}
                 </button>
               ))}
+              {(klingModel === "kling-v3" || klingModel === "kling-v2-6") && (
+                <label className="inline-flex items-center gap-1 text-[11px] text-slate-300 ml-1 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={enableKlingSound}
+                    onChange={(e) => setEnableKlingSound(e.target.checked)}
+                    className="rounded border-slate-600 bg-slate-950 text-sky-500"
+                  />
+                  带可灵环境音效
+                </label>
+              )}
             </div>
           )}
           <div className="flex flex-wrap items-center gap-2.5">
@@ -648,6 +807,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
             <div className="flex items-center gap-2">
               <a
                 href={`${finalVideos[0].file_url}?download=1`}
+                download
                 className="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs inline-flex items-center gap-1.5"
               >
                 <Download className="w-3.5 h-3.5" />
@@ -669,6 +829,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onToast }) => {
               src={finalVideos[0].file_url}
               controls
               playsInline
+              preload="metadata"
               className="max-h-96 rounded-lg"
             />
           </div>

@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     kling_secret_key: str = Field(default="", alias="KLING_SECRET_KEY")
     kling_api_key: str = Field(default="", alias="KLING_API_KEY")
     kling_model_name: str = Field(
-        default="kling-v3", alias="KLING_MODEL_NAME"
+        default="kling-v2-5-turbo", alias="KLING_MODEL_NAME"
     )
     kling_mode: str = Field(default="std", alias="KLING_MODE")
 
