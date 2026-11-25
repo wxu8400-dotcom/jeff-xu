@@ -365,6 +365,8 @@ export const api = {
       asset_ids?: string[];
       include_images_as_motion?: boolean;
       image_clip_duration?: number;
+      sfx_mode?: "auto_match_source" | "source_audio_only" | "kling_v2a" | "none";
+      sfx_prompt?: string;
       enable_voiceover?: boolean;
       voiceover_text?: string;
       voiceover_voice?: string;

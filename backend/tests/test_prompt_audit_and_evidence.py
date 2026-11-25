@@ -10,10 +10,23 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from app.routers.studio import _apply_no_product_shot_guard, _extract_prompt_doc_bytes_text
+from app.services.audio_engine import (
+    _generate_mock_voice_mp3,
+    align_source_audio_to_duration,
+)
 from app.services.video_processor import (
     build_timestamped_contact_sheet,
+    is_ffmpeg_available,
     merge_shot_and_uniform_timestamps,
 )
+
+
+def test_align_source_audio_to_duration_stretches_cleanly() -> None:
+    if not is_ffmpeg_available():
+        return
+    src_mp3 = _generate_mock_voice_mp3(3.0)
+    aligned = align_source_audio_to_duration(src_mp3, 4.5)
+    assert len(aligned) > 1000
 
 
 def _make_sample_docx(text: str) -> bytes:

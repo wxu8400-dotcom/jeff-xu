@@ -379,6 +379,8 @@ class StudioStateOut(BaseModel):
     openai_image_configured: bool = False
     kling_configured: bool = False
     ffmpeg_available: bool = False
+    has_source_audio: bool = False
+    recommended_sfx_prompt: str = ""
     assets: list[GeneratedAssetOut] = Field(default_factory=list)
 
 
@@ -450,6 +452,8 @@ class StitchFinalVideoRequest(BaseModel):
     asset_ids: list[str] = Field(default_factory=list)
     include_images_as_motion: bool = True
     image_clip_duration: float = 3.5
+    sfx_mode: Literal["auto_match_source", "source_audio_only", "kling_v2a", "none"] = "auto_match_source"
+    sfx_prompt: str = ""
     enable_voiceover: bool = False
     voiceover_text: str = ""
     voiceover_voice: str = "zh-CN-YunxiNeural"

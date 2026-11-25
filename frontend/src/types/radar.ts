@@ -317,6 +317,8 @@ export interface StudioState {
   openai_image_configured: boolean;
   kling_configured: boolean;
   ffmpeg_available: boolean;
+  has_source_audio?: boolean;
+  recommended_sfx_prompt?: string;
   assets: GeneratedAsset[];
 }
 

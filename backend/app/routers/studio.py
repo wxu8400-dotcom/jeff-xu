@@ -54,7 +54,9 @@ from ..schemas import (
 )
 from ..services.ai_client import UnifiedAIClient
 from ..services.audio_engine import (
+    align_source_audio_to_duration,
     generate_builtin_bgm_mp3,
+    generate_kling_video_to_audio,
     generate_tts_voiceover,
     mix_audio_into_mp4,
 )
@@ -75,7 +77,11 @@ from ..services.prompts import (
     build_prompt_audit_and_revision_prompt,
     build_prompt_review_only_prompt,
 )
-from ..services.video_processor import is_ffmpeg_available, load_source_evidence_images
+from ..services.video_processor import (
+    is_ffmpeg_available,
+    load_source_audio_bytes,
+    load_source_evidence_images,
+)
 from ..services.video_stitcher import stitch_media_items_to_mp4
 
 logger = logging.getLogger(__name__)
@@ -466,6 +472,27 @@ async def _run_kling_video_job(
             db.close()
 
 
+def _build_recommended_sfx_prompt(video: VideoRecord) -> str:
+    analysis = video.analysis_json or {}
+    cues: list[str] = []
+    plan = analysis.get("director_plan") or {}
+    eg = plan.get("editing_guidelines") or {}
+    for tip in list(eg.get("audio_and_overlay_tips") or [])[:2]:
+        s = str(tip or "").strip()
+        if s and "Logo" not in s and "联系方式" not in s:
+            cues.append(s)
+    for shot in list(analysis.get("storyboard") or [])[:6]:
+        if isinstance(shot, dict):
+            sfx = str(shot.get("audio_sfx") or "").strip()
+            if sfx and sfx not in cues:
+                cues.append(sfx)
+    if not cues:
+        bgm = str((analysis.get("shooting_requirements") or {}).get("bgm_style") or "").strip()
+        if bgm:
+            cues.append(bgm)
+    return "；".join(cues)[:190]
+
+
 @router.get("/videos/{video_id}/assets", response_model=StudioStateOut)
 def get_studio_state(
     video_id: str,
@@ -483,6 +510,8 @@ def get_studio_state(
     )
     rows = list(db.scalars(stmt).all())
 
+    has_src_audio = (MEDIA_DIR / f"source_audio_{video.id}.mp3").exists()
+
     return StudioStateOut(
         video_id=video.id,
         session_id=session.id,
@@ -495,6 +524,8 @@ def get_studio_state(
         openai_image_configured=cfg.openai_image_configured(),
         kling_configured=cfg.kling_configured(),
         ffmpeg_available=is_ffmpeg_available(),
+        has_source_audio=has_src_audio,
+        recommended_sfx_prompt=_build_recommended_sfx_prompt(video),
         assets=[_serialize_asset(r) for r in rows],
     )
 
@@ -1810,6 +1841,7 @@ async def upload_custom_bgm(
 async def stitch_final_video(
     video_id: str,
     body: StitchFinalVideoRequest,
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
 ) -> GeneratedAssetOut:
     """Stitch all ready clips in storyboard order into one 9:16 vertical MP4,
@@ -1904,10 +1936,77 @@ async def stitch_final_video(
         logger.exception("FFmpeg stitch failed for video %s: %s", video_id, exc)
         raise HTTPException(status_code=500, detail=f"成片合成失败：{exc}") from exc
 
-    # Optional Audio Mixing: 100% Free AI Voiceover + BGM
+    # Automatic Audio & SFX Matching:
+    # 1) Match original video's real SFX track (tempo-aligned) or Kling Video-to-Audio AI Foley
+    # 2) Optional free AI Voiceover + BGM
+    sfx_track_bytes: bytes | None = None
     voiceover_bytes: bytes | None = None
     bgm_bytes: bytes | None = None
     audio_tags: list[str] = []
+
+    sfx_mode = body.sfx_mode or "auto_match_source"
+    if sfx_mode != "none":
+        src_audio = load_source_audio_bytes(video.id, MEDIA_DIR)
+        sfx_prompt_text = (body.sfx_prompt or _build_recommended_sfx_prompt(video)).strip()
+
+        # Engine B: Kling Video-to-Audio AI Foley (when explicitly chosen & public URL is reachable)
+        if (
+            sfx_mode == "kling_v2a"
+            and cfg.kling_configured()
+            and not cfg.enable_mock_mode
+            and not cfg.app_password.strip()
+            and 3.0 <= total_dur <= 20.0
+        ):
+            temp_asset = GeneratedAsset(
+                video_id=video.id,
+                session_id=session.id,
+                asset_type="final_video",
+                slot_index=-9,
+                shot_no=None,
+                scene_title="sfx_temp",
+                provider="ffmpeg_stitch",
+                model_name="temp",
+                status="processing",
+                mime_type="video/mp4",
+            )
+            db.add(temp_asset)
+            db.flush()
+            _save_asset_media(temp_asset, final_bytes)
+            db.commit()
+            public_base = str(request.base_url).rstrip("/")
+            if public_base.startswith("http") and "localhost" not in public_base and "127.0.0.1" not in public_base:
+                kling_v2a_mp4 = await generate_kling_video_to_audio(
+                    video_url=f"{public_base}/api/studio/assets/{temp_asset.id}/file",
+                    sound_effect_prompt=sfx_prompt_text,
+                    asmr_mode=True,
+                    api_key=cfg.resolved_kling_api_key(),
+                    base_url=cfg.kling_base_url,
+                )
+                if kling_v2a_mp4:
+                    final_bytes = kling_v2a_mp4
+                    audio_tags.append("AI逐帧拟音(Kling V2A)")
+            _delete_local_media(temp_asset.id)
+            db.delete(temp_asset)
+            db.commit()
+
+        # Engine A (Primary / Automatic Fallback): Original Video Real Audio Track Tempo-Aligned
+        if not audio_tags and src_audio:
+            try:
+                sfx_track_bytes = await asyncio.to_thread(
+                    align_source_audio_to_duration, src_audio, total_dur
+                )
+                audio_tags.append("原视频同款音效智能对齐")
+            except Exception as exc:
+                logger.warning("Source audio alignment skipped: %s", exc)
+        elif not audio_tags and sfx_mode == "auto_match_source" and body.bgm_mode == "none":
+            # Fallback cinematic ambience pad when original video had no audio track
+            try:
+                sfx_track_bytes = await asyncio.to_thread(
+                    generate_builtin_bgm_mp3, "ambient_chill", total_dur
+                )
+                audio_tags.append("智能电影氛围音效兜底")
+            except Exception:
+                pass
 
     if body.enable_voiceover:
         copy = (video.analysis_json or {}).get("copywriting") or {}
@@ -1945,14 +2044,16 @@ async def stitch_final_video(
             "内置商业轻节奏BGM" if body.bgm_mode == "upbeat_pulse" else "内置极简氛围BGM"
         )
 
-    if voiceover_bytes or bgm_bytes:
+    if sfx_track_bytes or voiceover_bytes or bgm_bytes:
         try:
             final_bytes = await asyncio.to_thread(
                 mix_audio_into_mp4,
                 final_bytes,
+                sfx_track_bytes=sfx_track_bytes,
                 voiceover_bytes=voiceover_bytes,
                 bgm_bytes=bgm_bytes,
                 keep_original_audio=True,
+                sfx_volume=0.90,
                 bgm_volume=max(0.05, min(float(body.bgm_volume or 0.20), 0.80)),
             )
         except Exception as exc:

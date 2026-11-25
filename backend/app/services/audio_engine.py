@@ -6,6 +6,9 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Any
+
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -161,16 +164,207 @@ def generate_builtin_bgm_mp3(style: str, duration_sec: float) -> bytes:
         return out_mp3.read_bytes()
 
 
+def _has_audio_stream(media_path: Path) -> bool:
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        return True
+    try:
+        res = subprocess.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-select_streams",
+                "a",
+                "-show_entries",
+                "stream=codec_type",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(media_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        return bool(res.returncode == 0 and res.stdout.strip())
+    except Exception:
+        return True
+
+
+def align_source_audio_to_duration(
+    source_audio_bytes: bytes,
+    target_duration_sec: float,
+) -> bytes:
+    """Align the original video's real audio/SFX track to the new stitched video's exact
+    duration using pitch-preserving FFmpeg atempo (for 0.55x-1.85x ratios) or clean loop/trim,
+    preserving the original video's exact pacing of sound effects and ambience."""
+    ffmpeg = _ffmpeg_bin()
+    target_dur = max(1.5, float(target_duration_sec))
+    with tempfile.TemporaryDirectory(prefix="radar_align_sfx_") as tmpdir:
+        tmp = Path(tmpdir)
+        in_aud = tmp / "source.mp3"
+        out_aud = tmp / "aligned.mp3"
+        in_aud.write_bytes(source_audio_bytes)
+        src_dur = _ffprobe_duration(in_aud)
+        ratio = src_dur / target_dur if target_dur > 0 else 1.0
+
+        fade_out_start = max(target_dur - 1.0, 0.4)
+        if 0.55 <= ratio <= 1.85:
+            # Smooth pitch-preserving tempo stretch so climax SFX aligns with the new video's arc
+            af = (
+                f"atempo={ratio:.3f},"
+                f"apad=whole_dur={target_dur:.2f},"
+                f"atrim=0:{target_dur:.2f},"
+                f"afade=t=in:st=0:d=0.25,"
+                f"afade=t=out:st={fade_out_start:.2f}:d=0.9,"
+                f"alimiter=limit=0.95"
+            )
+            cmd = [
+                ffmpeg,
+                "-y",
+                "-i",
+                str(in_aud),
+                "-af",
+                af,
+                "-c:a",
+                "libmp3lame",
+                "-b:a",
+                "128k",
+                "-ar",
+                "44100",
+                "-ac",
+                "2",
+                "-threads",
+                "1",
+                str(out_aud),
+            ]
+        else:
+            af = (
+                f"atrim=0:{target_dur:.2f},"
+                f"afade=t=in:st=0:d=0.25,"
+                f"afade=t=out:st={fade_out_start:.2f}:d=0.9,"
+                f"alimiter=limit=0.95"
+            )
+            cmd = [
+                ffmpeg,
+                "-y",
+                "-stream_loop",
+                "-1",
+                "-i",
+                str(in_aud),
+                "-af",
+                af,
+                "-c:a",
+                "libmp3lame",
+                "-b:a",
+                "128k",
+                "-ar",
+                "44100",
+                "-ac",
+                "2",
+                "-threads",
+                "1",
+                str(out_aud),
+            ]
+
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=45, check=False)
+        if res.returncode == 0 and out_aud.exists() and out_aud.stat().st_size > 500:
+            return out_aud.read_bytes()
+        logger.warning("Source audio alignment failed: %s", res.stderr[-250:])
+        return source_audio_bytes
+
+
+async def generate_kling_video_to_audio(
+    *,
+    video_url: str,
+    sound_effect_prompt: str,
+    bgm_prompt: str = "",
+    asmr_mode: bool = True,
+    api_key: str,
+    base_url: str,
+) -> bytes | None:
+    """Call Kling Video-to-Audio (via 302.ai or official Kling gateway) to synthesize
+    frame-synchronized Foley SFX directly matching the stitched video. Returns MP4 bytes
+    with synced audio, or None if unavailable so callers cleanly fall back to source audio."""
+    if not video_url.startswith("http") or not api_key.strip():
+        return None
+
+    clean_base = base_url.rstrip("/")
+    if clean_base.endswith("/v1"):
+        clean_base = clean_base[:-3]
+    endpoint = f"{clean_base}/kling/v1/audio/video-to-audio"
+    headers = {
+        "Authorization": f"Bearer {api_key.strip()}",
+        "Content-Type": "application/json",
+    }
+    payload: dict[str, Any] = {
+        "video_url": video_url,
+        "sound_effect_prompt": (sound_effect_prompt or "realistic cinematic sound effects")[:200],
+        "asmr_mode": bool(asmr_mode),
+    }
+    if bgm_prompt.strip():
+        payload["bgm_prompt"] = bgm_prompt.strip()[:180]
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
+            resp = await client.post(endpoint, headers=headers, json=payload)
+            if resp.status_code >= 400:
+                logger.info(
+                    "Kling video-to-audio unavailable (%s): %s",
+                    resp.status_code,
+                    resp.text[:220],
+                )
+                return None
+            data = resp.json()
+            inner = data.get("data") if isinstance(data.get("data"), dict) else data
+            task_id = str(inner.get("task_id") or inner.get("id") or "").strip()
+            if not task_id:
+                return None
+
+            poll_url = f"{endpoint}/{task_id}"
+            for _ in range(36):
+                await asyncio.sleep(2.5)
+                pr = await client.get(poll_url, headers=headers)
+                if pr.status_code >= 400:
+                    continue
+                pdata = pr.json()
+                pinner = pdata.get("data") if isinstance(pdata.get("data"), dict) else pdata
+                st = str(pinner.get("task_status") or pinner.get("status") or "").lower()
+                if st in ("succeed", "succeeded", "completed", "success"):
+                    res_obj = pinner.get("task_result") or pinner
+                    videos = res_obj.get("videos") if isinstance(res_obj, dict) else None
+                    out_url = None
+                    if isinstance(videos, list) and videos and isinstance(videos[0], dict):
+                        out_url = videos[0].get("url")
+                    if not out_url and isinstance(res_obj, dict):
+                        out_url = res_obj.get("video_url") or res_obj.get("url")
+                    if isinstance(out_url, str) and out_url.startswith("http"):
+                        dl = await client.get(out_url, follow_redirects=True, timeout=45.0)
+                        if dl.status_code == 200 and len(dl.content) > 5000:
+                            return dl.content
+                    return None
+                if st in ("failed", "error", "canceled"):
+                    logger.info("Kling video-to-audio task failed: %s", pinner.get("task_status_msg"))
+                    return None
+    except Exception as exc:
+        logger.info("Kling video-to-audio call skipped due to error: %s", exc)
+    return None
+
+
 def mix_audio_into_mp4(
     video_mp4_bytes: bytes,
     *,
+    sfx_track_bytes: bytes | None = None,
     voiceover_bytes: bytes | None = None,
     bgm_bytes: bytes | None = None,
     keep_original_audio: bool = True,
+    sfx_volume: float = 0.90,
     bgm_volume: float = 0.20,
 ) -> bytes:
-    """Mux AI voiceover + ducked BGM + original video audio into MP4 WITHOUT re-encoding video."""
-    if not voiceover_bytes and not bgm_bytes:
+    """Mux matched SFX track + AI voiceover + ducked BGM + original clip audio into MP4
+    WITHOUT re-encoding video."""
+    if not sfx_track_bytes and not voiceover_bytes and not bgm_bytes:
         return video_mp4_bytes
 
     ffmpeg = _ffmpeg_bin()
@@ -180,15 +374,29 @@ def mix_audio_into_mp4(
         out_vid = tmp / "mixed.mp4"
         in_vid.write_bytes(video_mp4_bytes)
         vid_dur = _ffprobe_duration(in_vid)
+        vid_has_audio = _has_audio_stream(in_vid)
 
         cmd: list[str] = [ffmpeg, "-y", "-i", str(in_vid)]
         input_idx = 1
         mix_labels: list[str] = []
         filter_parts: list[str] = []
 
-        if keep_original_audio:
-            filter_parts.append(f"[0:a]volume=0.85,atrim=0:{vid_dur:.2f}[a_orig]")
+        if keep_original_audio and vid_has_audio:
+            orig_vol = 0.55 if sfx_track_bytes else 0.85
+            filter_parts.append(f"[0:a]volume={orig_vol:.2f},atrim=0:{vid_dur:.2f}[a_orig]")
             mix_labels.append("[a_orig]")
+
+        if sfx_track_bytes:
+            sfx_path = tmp / "sfx.mp3"
+            sfx_path.write_bytes(sfx_track_bytes)
+            cmd.extend(["-i", str(sfx_path)])
+            fade_start = max(vid_dur - 0.9, 0.4)
+            filter_parts.append(
+                f"[{input_idx}:a]apad=whole_dur={vid_dur:.2f},atrim=0:{vid_dur:.2f},"
+                f"volume={sfx_volume:.2f},afade=t=out:st={fade_start:.2f}:d=0.8[a_sfx]"
+            )
+            mix_labels.append("[a_sfx]")
+            input_idx += 1
 
         if voiceover_bytes:
             vo_path = tmp / "voiceover.mp3"
@@ -210,13 +418,16 @@ def mix_audio_into_mp4(
             bgm_path = tmp / "bgm.mp3"
             bgm_path.write_bytes(bgm_bytes)
             cmd.extend(["-stream_loop", "-1", "-i", str(bgm_path)])
-            vol = bgm_volume if voiceover_bytes else max(bgm_volume, 0.45)
+            vol = bgm_volume if (voiceover_bytes or sfx_track_bytes) else max(bgm_volume, 0.45)
             fade_start = max(vid_dur - 1.5, 0.5)
             filter_parts.append(
                 f"[{input_idx}:a]atrim=0:{vid_dur:.2f},volume={vol:.2f},afade=t=out:st={fade_start:.2f}:d=1.4[a_bgm]"
             )
             mix_labels.append("[a_bgm]")
             input_idx += 1
+
+        if not mix_labels:
+            return video_mp4_bytes
 
         if len(mix_labels) == 1:
             filter_parts.append(f"{mix_labels[0]}alimiter=limit=0.95[a_out]")

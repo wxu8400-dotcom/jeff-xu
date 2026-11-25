@@ -67,8 +67,12 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
     () => video.analysis_json?.copywriting?.adapted_script_cn || ""
   );
   const [showVoiceEditor, setShowVoiceEditor] = useState<boolean>(false);
+  const [sfxMode, setSfxMode] = useState<
+    "auto_match_source" | "source_audio_only" | "kling_v2a" | "none"
+  >("auto_match_source");
+  const [sfxPrompt, setSfxPrompt] = useState<string>("");
   const [bgmMode, setBgmMode] = useState<"none" | "ambient_chill" | "upbeat_pulse" | "custom">(
-    "upbeat_pulse"
+    "none"
   );
   const [bgmUploadBusy, setBgmUploadBusy] = useState<boolean>(false);
   const [checkedRealShots, setCheckedRealShots] = useState<Record<number, boolean>>({});
@@ -98,6 +102,9 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
       const data = await api.getStudioState(video.id);
       setStudio(data);
       if (!silent) {
+        if (data.recommended_sfx_prompt && !sfxPrompt) {
+          setSfxPrompt(data.recommended_sfx_prompt);
+        }
         if (data.default_image_provider === "openai" && data.openai_image_configured) {
           setImageProvider("openai");
         } else if (data.gemini_image_configured) {
@@ -440,6 +447,8 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
         asset_ids: orderedIds,
         include_images_as_motion: true,
         image_clip_duration: 3.5,
+        sfx_mode: sfxMode,
+        sfx_prompt: sfxPrompt,
         enable_voiceover: enableVoiceover,
         voiceover_text: voiceoverText,
         voiceover_voice: voiceoverVoice,
@@ -736,6 +745,57 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
             >
               {showVoiceEditor ? "收起口播台词" : "查看 / 修改配音台词"}
             </button>
+          </div>
+
+          {/* Automatic Original-Video-Style SFX Matching Row */}
+          <div className="rounded-xl bg-emerald-950/20 border border-emerald-500/30 p-2.5 space-y-2 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-bold text-emerald-300">🔊 自动匹配原片风格音效：</span>
+                <select
+                  value={sfxMode}
+                  onChange={(e) =>
+                    setSfxMode(
+                      e.target.value as
+                        | "auto_match_source"
+                        | "source_audio_only"
+                        | "kling_v2a"
+                        | "none"
+                    )
+                  }
+                  className="px-2.5 py-1.5 rounded-lg bg-slate-950 border border-emerald-500/40 text-[11px] text-emerald-100 font-semibold"
+                >
+                  <option value="auto_match_source">
+                    🎬 自动匹配原片同款音效（推荐·合成时自动变速对齐）
+                  </option>
+                  <option value="source_audio_only">
+                    🎵 仅用原视频真实音轨对齐（免费·与原片 100% 同款）
+                  </option>
+                  <option value="kling_v2a">
+                    ✨ AI 逐帧拟音（Kling Video-to-Audio，失败自动回退原片音轨）
+                  </option>
+                  <option value="none">不额外叠音效（仅保留分镜原声）</option>
+                </select>
+              </div>
+              {studio.has_source_audio ? (
+                <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-200 text-[10px] font-semibold">
+                  ✓ 已存档原视频真实音轨
+                </span>
+              ) : (
+                <span className="text-[10px] text-slate-400">
+                  （未检测到原片音轨时将自动采用 AI 拟音/氛围音效兜底）
+                </span>
+              )}
+            </div>
+            {sfxMode === "kling_v2a" && (
+              <input
+                type="text"
+                value={sfxPrompt}
+                onChange={(e) => setSfxPrompt(e.target.value)}
+                placeholder="AI 拟音提示词（如：机舱风声、下坠呼啸、火山喷发轰鸣、沙发落地闷响、自然笑声）"
+                className="w-full px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-[11px] text-slate-100 placeholder-slate-500"
+              />
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 text-xs">

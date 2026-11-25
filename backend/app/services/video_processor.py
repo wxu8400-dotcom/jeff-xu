@@ -396,6 +396,73 @@ def build_timestamped_contact_sheet(
     return buf.getvalue()
 
 
+def extract_and_save_source_audio(
+    video_id: str,
+    video_bytes: bytes,
+    media_dir: Path,
+) -> bool:
+    """Extract the original video's real audio track to disk (MP3) so the Studio can
+    automatically tempo-align and match original-video-style sound effects into the final MP4."""
+    if not is_ffmpeg_available() or not video_bytes:
+        return False
+    fd, tmp_name = tempfile.mkstemp(prefix="radar_srcaud_", suffix=".mp4")
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    out_mp3 = media_dir / f"source_audio_{video_id}.mp3"
+    try:
+        media_dir.mkdir(parents=True, exist_ok=True)
+        tmp_path.write_bytes(video_bytes)
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(tmp_path),
+            "-vn",
+            "-ac",
+            "2",
+            "-ar",
+            "44100",
+            "-c:a",
+            "libmp3lame",
+            "-b:a",
+            "128k",
+            "-threads",
+            "1",
+            str(out_mp3),
+        ]
+        res = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+            check=False,
+        )
+        if res.returncode == 0 and out_mp3.exists() and out_mp3.stat().st_size > 1024:
+            return True
+        if out_mp3.exists():
+            try:
+                out_mp3.unlink()
+            except OSError:
+                pass
+        return False
+    except Exception as exc:
+        logger.debug("Source audio extraction skipped for %s: %s", video_id, exc)
+        return False
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+
+def load_source_audio_bytes(video_id: str, media_dir: Path) -> bytes | None:
+    path = media_dir / f"source_audio_{video_id}.mp3"
+    if path.exists() and path.stat().st_size > 1024:
+        return path.read_bytes()
+    return None
+
+
 def save_source_evidence_pack(
     video_id: str,
     video_bytes: bytes,
@@ -426,12 +493,15 @@ def save_source_evidence_pack(
     if sheet_bytes:
         (ev_dir / "contact_sheet.jpg").write_bytes(sheet_bytes)
 
+    audio_saved = extract_and_save_source_audio(video_id, video_bytes, media_dir)
+
     manifest = {
         "video_id": video_id,
         "frame_count": len(frames_with_ts),
         "timestamps": timestamps,
         "frames": manifest_frames,
         "has_contact_sheet": bool(sheet_bytes),
+        "has_source_audio": audio_saved,
     }
     (ev_dir / "manifest.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
