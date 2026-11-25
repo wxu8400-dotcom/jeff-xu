@@ -140,12 +140,16 @@ export const api = {
     videoId: string,
     payload: {
       productReplacedPromptText?: string;
+      promptFile?: File | null;
       promptImages?: File[];
     }
   ) => {
     const fd = new FormData();
     if (payload.productReplacedPromptText) {
       fd.append("product_replaced_prompt_text", payload.productReplacedPromptText);
+    }
+    if (payload.promptFile) {
+      fd.append("prompt_file", payload.promptFile);
     }
     for (const file of payload.promptImages || []) {
       fd.append("prompt_images", file);
@@ -164,6 +168,7 @@ export const api = {
     payload: {
       referencePromptText?: string;
       modificationNotes?: string;
+      promptFile?: File | null;
       promptImages?: File[];
     }
   ) => {
@@ -173,6 +178,9 @@ export const api = {
     }
     if (payload.modificationNotes) {
       fd.append("modification_notes", payload.modificationNotes);
+    }
+    if (payload.promptFile) {
+      fd.append("prompt_file", payload.promptFile);
     }
     for (const file of payload.promptImages || []) {
       fd.append("prompt_images", file);

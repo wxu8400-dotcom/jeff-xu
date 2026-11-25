@@ -638,7 +638,11 @@ def build_prompt_audit_and_revision_prompt(
 2. **第二部分：拆分为 3~6 个可控制的镜头（直接写入 `storyboard` + `chatgpt_images_prompts` + `kling_prompts`）**
    - **关键原则（先定静态关键帧，再写图生视频动态）**：
      - 每一行镜头必须拆清楚：**（A）关键帧图片内容**（用于先生成静态首帧图供用户确认）和 **（B）图生视频动态提示词**（用于拿确认好的首帧图交给可灵 Kling I2V 动起来）！
-     - `storyboard[i]`：写出清晰的 `shot_no`（1..N）、`time_range`（建议成片时长，如 `约3秒`、`约2秒`）、`shot_size`、`camera_movement`、`original_visual`（对应原片哪一拍）、`adapted_visual_for_product`（修改后的镜头摘要，含镜头短标题如「展示并抛出」）、`has_person`、`replication_action`（出现目标商品标 `"insert_product"`，纯环境/无商品过渡标 `"keep_scene"`）。
+     - `storyboard[i]`：写出清晰的 `shot_no`（1..N）、`time_range`（建议成片时长，如 `约3秒`、`约2秒`）、`shot_size`、`camera_movement`、`original_visual`（对应原片哪一拍）、`adapted_visual_for_product`（修改后的镜头摘要，含镜头短标题如「展示并抛出」）、`has_person`、`replication_action`。
+     - **【防提前串镜铁律（极重要！）】**：
+       - 如果制作包或提示词在某一镜头明确写了「画面内没有成品沙发 / 没有可见产品 / 仅展示原材料或皮料 / 纯火山环境 / 不出现成品」，该镜头**必须**标 `replication_action: "keep_scene"`（系统生图时将自动**不附带**成品商品参考图，彻底避免 AI 提前把成品画进开场或火山口！）；
+       - 只有明确出现成品商品（或写了「上传产品/沙发照片作为产品参考」）的镜头，才标 `replication_action: "insert_product"`！
+       - 若制作包中已写明「生成和剪辑顺序 / 剪辑衔接 / 验收要点」，请完整提炼保留到 `editing_guidelines` 中，不要遗漏用户的剪辑衔接说明！
      - **重要：严格逐镜拆分隔离！** 用户是一次性粘贴全部提示词给你的，你在拆分输出 `chatgpt_images_prompts[1..N]` 和 `kling_prompts[0..N-1]` 时，**每个镜头只能写当前这一镜头的独立关键帧和独立动作，绝不能把整套剧情重复粘贴进每个镜头！**
      - `chatgpt_images_prompts`：
        - **索引 0**：主视觉海报（封面图）；

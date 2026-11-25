@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
 import logging
+import xml.etree.ElementTree as ET
+import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Any
@@ -725,6 +728,82 @@ def delete_director_memory(
     return {"ok": True}
 
 
+_NO_PRODUCT_MARKERS = (
+    "没有成品",
+    "无成品",
+    "没有可见沙发",
+    "没有可见产品",
+    "不出现产品",
+    "不出现成品",
+    "没有产品",
+    "no finished product",
+    "no finished sofa",
+    "without the finished product",
+    "before the product appears",
+)
+
+
+def _extract_prompt_doc_bytes_text(filename: str, raw: bytes) -> str:
+    """Extract plain text from uploaded .txt / .md / .docx production pack files."""
+    if not raw:
+        return ""
+    lower = (filename or "").lower()
+    if lower.endswith(".docx"):
+        try:
+            with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+                xml_bytes = zf.read("word/document.xml")
+            root = ET.fromstring(xml_bytes)
+            paragraphs: list[str] = []
+            for p in root.iter():
+                if p.tag.endswith("}p"):
+                    texts = [
+                        t.text
+                        for t in p.iter()
+                        if t.tag.endswith("}t") and t.text
+                    ]
+                    line = "".join(texts).strip()
+                    if line:
+                        paragraphs.append(line)
+            return "\n".join(paragraphs).strip()
+        except Exception as exc:
+            logger.warning("Failed to parse .docx prompt file %s: %s", filename, exc)
+            return ""
+    for enc in ("utf-8-sig", "utf-8", "gb18030", "gbk"):
+        try:
+            return raw.decode(enc).strip()
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="ignore").strip()
+
+
+def _apply_no_product_shot_guard(
+    storyboard_list: list[dict[str, Any]],
+    image_prompts_list: list[dict[str, Any]],
+) -> None:
+    """Deterministic anti-leak guard: if a shot explicitly states '没有成品沙发 / 没有可见产品'
+    (e.g. raw leather / volcano before transformation), force replication_action='keep_scene'
+    so the finished product photo is NOT attached when generating that keyframe."""
+    for idx, shot in enumerate(storyboard_list):
+        if not isinstance(shot, dict):
+            continue
+        img_p = (
+            image_prompts_list[idx + 1]
+            if idx + 1 < len(image_prompts_list) and isinstance(image_prompts_list[idx + 1], dict)
+            else {}
+        )
+        combined = " ".join(
+            str(x or "")
+            for x in (
+                shot.get("adapted_visual_for_product"),
+                shot.get("original_visual"),
+                img_p.get("prompt_cn"),
+                img_p.get("prompt_en"),
+            )
+        ).lower()
+        if any(marker in combined for marker in _NO_PRODUCT_MARKERS):
+            shot["replication_action"] = "keep_scene"
+
+
 def _collect_source_evidence_for_audit(
     video: VideoRecord,
     curr_plan: dict[str, Any],
@@ -799,6 +878,11 @@ def _merge_revision_into_analysis(
         updated_dict["chatgpt_images_prompts"] = [
             p.model_dump() for p in rev_res.chatgpt_images_prompts
         ]
+    if updated_dict.get("storyboard"):
+        _apply_no_product_shot_guard(
+            updated_dict["storyboard"],
+            updated_dict.get("chatgpt_images_prompts") or [],
+        )
     if rev_res.kling_prompts:
         neg_default = updated_plan.get("negative_constraints") or ""
         k_list = []
@@ -828,13 +912,20 @@ async def review_product_replaced_prompt(
     video_id: str,
     db: Annotated[Session, Depends(get_db)],
     product_replaced_prompt_text: str = Form(default=""),
+    prompt_file: UploadFile | None = File(default=None),
     prompt_images: list[UploadFile] = File(default=[]),
 ) -> dict[str, Any]:
     """Step 2A (Review ONLY): User directly submits their ALREADY product-replaced prompt
-    (text and/or screenshots). Compare it against the persisted original video frames +
-    original video prompt + uploaded product photos and return structured review opinions +
-    editing guidelines WITHOUT overwriting the finalized plan yet."""
+    (text, .txt/.md/.docx production pack file, and/or screenshots). Compare it against the
+    persisted original video frames + original video prompt + uploaded product photos and return
+    structured review opinions + editing guidelines WITHOUT overwriting the finalized plan yet."""
     prompt_text = product_replaced_prompt_text.strip()
+    if prompt_file is not None and prompt_file.filename:
+        doc_raw = await prompt_file.read()
+        doc_text = _extract_prompt_doc_bytes_text(prompt_file.filename, doc_raw)
+        if doc_text:
+            prompt_text = f"{doc_text}\n\n{prompt_text}".strip() if prompt_text else doc_text
+
     prompt_shots_bytes: list[tuple[bytes, str]] = []
     for pf in (prompt_images or [])[:8]:
         raw = await pf.read()
@@ -846,7 +937,7 @@ async def review_product_replaced_prompt(
     if not prompt_text and not prompt_shots_bytes:
         raise HTTPException(
             status_code=400,
-            detail="请先粘贴你替换商品后的提示词，或上传提示词截图",
+            detail="请先粘贴你替换商品后的提示词、上传制作包文件（.txt/.md/.docx）或上传提示词截图",
         )
 
     cfg = get_settings()
@@ -908,16 +999,22 @@ async def audit_and_revise_prompt(
     db: Annotated[Session, Depends(get_db)],
     reference_prompt_text: str = Form(default=""),
     modification_notes: str = Form(default=""),
+    prompt_file: UploadFile | None = File(default=None),
     prompt_images: list[UploadFile] = File(default=[]),
 ) -> dict[str, Any]:
-    """Frame-by-frame visual audit & 3-part prompt generator:
+    """Frame-by-frame visual audit & 4-part prompt generator:
     1) Loads the persisted real original video Contact Sheet + HD scene-cut keyframes.
-    2) Visually cross-checks the user's submitted reference prompt (text + up to 8 screenshots)
-       against the actual original video frames.
+    2) Visually cross-checks the user's submitted reference prompt (text, .txt/.md/.docx file,
+       and/or up to 8 screenshots) against the actual original video frames.
     3) Applies the user's modification instructions + multi-angle product photos to produce
-       the verified 3-part production prompt package (Global Reference + Controllable Shot Table
-       + Global Constraints) directly driving Step 2 image gen & Kling I2V."""
+       the verified 4-part production prompt package (Global Reference + Controllable Shot Table
+       + Global Constraints + Editing Guidelines) directly driving Step 2 image gen & Kling I2V."""
     ref_text = reference_prompt_text.strip()
+    if prompt_file is not None and prompt_file.filename:
+        doc_raw = await prompt_file.read()
+        doc_text = _extract_prompt_doc_bytes_text(prompt_file.filename, doc_raw)
+        if doc_text:
+            ref_text = f"{doc_text}\n\n{ref_text}".strip() if ref_text else doc_text
     mod_notes = modification_notes.strip()
 
     prompt_shots_bytes: list[tuple[bytes, str]] = []

@@ -3,15 +3,51 @@ from __future__ import annotations
 import io
 import os
 import time
+import zipfile
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from app.routers.studio import _apply_no_product_shot_guard, _extract_prompt_doc_bytes_text
 from app.services.video_processor import (
     build_timestamped_contact_sheet,
     merge_shot_and_uniform_timestamps,
 )
+
+
+def _make_sample_docx(text: str) -> bytes:
+    buf = io.BytesIO()
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        f"<w:body><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:body></w:document>"
+    )
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("word/document.xml", xml.encode("utf-8"))
+    return buf.getvalue()
+
+
+def test_prompt_doc_extraction_and_no_product_anti_leak_guard() -> None:
+    txt_out = _extract_prompt_doc_bytes_text("pack.txt", "镜头1：画面内没有成品沙发".encode("utf-8"))
+    assert "画面内没有成品沙发" in txt_out
+
+    docx_bytes = _make_sample_docx("皮料投入火山｜可灵制作包")
+    docx_out = _extract_prompt_doc_bytes_text("pack.docx", docx_bytes)
+    assert "皮料投入火山" in docx_out
+
+    storyboard = [
+        {"shot_no": 1, "adapted_visual_for_product": "展示橙色皮料，画面内没有成品沙发", "replication_action": "insert_product"},
+        {"shot_no": 2, "adapted_visual_for_product": "完整正常尺寸焦糖橙双人沙发弹射上升", "replication_action": "insert_product"},
+    ]
+    image_prompts = [
+        {"scene_title": "封面"},
+        {"scene_title": "镜头1", "prompt_cn": "女士端着皮料托盘，画面内没有成品沙发"},
+        {"scene_title": "镜头2", "prompt_cn": "上传沙发照片作为产品参考，完整焦糖橙沙发"},
+    ]
+    _apply_no_product_shot_guard(storyboard, image_prompts)
+    assert storyboard[0]["replication_action"] == "keep_scene"
+    assert storyboard[1]["replication_action"] == "insert_product"
 
 
 def _make_sample_jpeg(color: tuple[int, int, int] = (200, 120, 40)) -> bytes:
@@ -73,16 +109,17 @@ def test_audit_revise_endpoint_with_screenshots_and_3part_output(make_client) ->
             time.sleep(0.15)
         assert video_id is not None
 
-        # 1.5 Step 2A: Review-only endpoint returns suggestions + editing_guidelines without mutating plan
+        # 1.5 Step 2A: Review-only endpoint accepts .docx production pack file directly
         review_resp = client.post(
             f"/api/studio/videos/{video_id}/review-prompt",
-            data={
-                "product_replaced_prompt_text": "全片统一参考：9:16 竖屏写实沙发广告...\n镜头1：展示迷你沙发并抛出...",
-            },
             files=[
                 (
-                    "prompt_images",
-                    ("codex_shot_1.jpg", _make_sample_jpeg((30, 30, 40)), "image/jpeg"),
+                    "prompt_file",
+                    (
+                        "kling_pack.docx",
+                        _make_sample_docx("二、新版统一设定：焦糖橙沙发；镜头1：展示皮料，画面内没有成品沙发"),
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    ),
                 ),
             ],
         )

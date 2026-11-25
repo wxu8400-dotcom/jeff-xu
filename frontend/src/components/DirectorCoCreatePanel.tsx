@@ -7,6 +7,7 @@ import {
   ChevronUp,
   Copy,
   Edit3,
+  FileText,
   Film,
   ImagePlus,
   ListChecks,
@@ -104,6 +105,7 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
 
   // Step 2A: Direct Product-Replaced Prompt Input -> Review ONLY
   const [productReplacedPrompt, setProductReplacedPrompt] = useState("");
+  const [promptFile, setPromptFile] = useState<File | null>(null);
   const [promptImages, setPromptImages] = useState<File[]>([]);
   const [reviewing, setReviewing] = useState(false);
   const [reviewError, setReviewError] = useState("");
@@ -121,6 +123,7 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
   const [manualGlobalRefCn, setManualGlobalRefCn] = useState(globalRefCn || revisedPromptCn);
   const [manualConstraints, setManualConstraints] = useState(negativeConstraints);
 
+  const promptFileInputRef = useRef<HTMLInputElement | null>(null);
   const promptImgInputRef = useRef<HTMLInputElement | null>(null);
   const reviewBoxRef = useRef<HTMLDivElement | null>(null);
   const revisedBoxRef = useRef<HTMLDivElement | null>(null);
@@ -216,19 +219,43 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
     if (ok) onToast(`已复制${label}`);
   };
 
+  const handleSelectPromptFile = async (file: File | null) => {
+    if (!file) return;
+    setPromptFile(file);
+    const lower = file.name.toLowerCase();
+    if (lower.endsWith(".txt") || lower.endsWith(".md")) {
+      try {
+        const text = await file.text();
+        if (text.trim()) {
+          setProductReplacedPrompt(text.trim());
+          onToast(`📄 已载入制作包文档：${file.name}`);
+          return;
+        }
+      } catch {
+        // Fallback to backend upload parsing
+      }
+    }
+    onToast(`📄 已附加制作包文档：${file.name}（提交时自动解析全文）`);
+  };
+
   // Step 2A: Compare user's product-replaced prompt vs original video -> Review Opinions ONLY
   const handleRunReview = async () => {
     const cleanPrompt = productReplacedPrompt.trim();
-    if (!cleanPrompt && promptImages.length === 0) {
-      onToast("请先粘贴你替换商品后的提示词，或上传提示词截图");
+    if (!cleanPrompt && !promptFile && promptImages.length === 0) {
+      onToast("请先粘贴你替换商品后的提示词、上传制作包文档（.txt/.md/.docx）或上传提示词截图");
       return;
     }
     setReviewing(true);
     setReviewError("");
     setApplyError("");
     try {
+      // If .txt/.md was already loaded into the textarea, avoid sending duplicate text in both fields
+      const lowerName = (promptFile?.name || "").toLowerCase();
+      const sendFile =
+        promptFile && (lowerName.endsWith(".docx") || !cleanPrompt) ? promptFile : null;
       const resp = await api.reviewProductReplacedPrompt(video.id, {
         productReplacedPromptText: cleanPrompt,
+        promptFile: sendFile,
         promptImages,
       });
       setReviewResult(resp.review);
@@ -253,8 +280,8 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
   // Step 2B: Apply ONLY the user-confirmed suggestions & split into shot-by-shot 4-part package
   const handleApplyConfirmedFixes = async (skipAllSuggestions = false) => {
     const cleanPrompt = productReplacedPrompt.trim();
-    if (!cleanPrompt && promptImages.length === 0) {
-      onToast("请先提交你替换商品后的提示词");
+    if (!cleanPrompt && !promptFile && promptImages.length === 0) {
+      onToast("请先提交你替换商品后的提示词或制作包文件");
       return;
     }
 
@@ -284,9 +311,13 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
     setApplying(true);
     setApplyError("");
     try {
+      const lowerName = (promptFile?.name || "").toLowerCase();
+      const sendFile =
+        promptFile && (lowerName.endsWith(".docx") || !cleanPrompt) ? promptFile : null;
       const resp = await api.auditRevisePrompt(video.id, {
         referencePromptText: cleanPrompt,
         modificationNotes: modInstruction,
+        promptFile: sendFile,
         promptImages,
       });
       setManualEditing(false);
@@ -599,6 +630,37 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
+                  onClick={() => promptFileInputRef.current?.click()}
+                  className="px-3 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-dashed border-emerald-400/60 text-[11px] text-emerald-200 font-semibold inline-flex items-center gap-1.5"
+                >
+                  <FileText className="w-3.5 h-3.5 text-emerald-400" />
+                  上传制作包文件（.txt / .md / .docx）
+                </button>
+                <input
+                  ref={promptFileInputRef}
+                  type="file"
+                  accept=".txt,.md,.docx,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  className="hidden"
+                  onChange={(e) => {
+                    handleSelectPromptFile(e.target.files?.[0] || null);
+                    e.target.value = "";
+                  }}
+                />
+                {promptFile && (
+                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-emerald-950/60 border border-emerald-500/40 text-[11px] text-emerald-200">
+                    <FileText className="w-3 h-3 text-emerald-400" />
+                    <span className="max-w-[160px] truncate">{promptFile.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => setPromptFile(null)}
+                      className="text-emerald-300/80 hover:text-rose-400"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                )}
+                <button
+                  type="button"
                   onClick={() => promptImgInputRef.current?.click()}
                   className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-dashed border-sky-500/50 text-[11px] text-sky-200 font-semibold inline-flex items-center gap-1.5"
                 >
@@ -640,7 +702,8 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
               <button
                 type="button"
                 disabled={
-                  reviewing || (!productReplacedPrompt.trim() && promptImages.length === 0)
+                  reviewing ||
+                  (!productReplacedPrompt.trim() && !promptFile && promptImages.length === 0)
                 }
                 onClick={handleRunReview}
                 className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-sky-500 to-cyan-400 hover:from-sky-400 hover:to-cyan-300 disabled:opacity-50 text-slate-950 font-bold text-xs inline-flex items-center gap-1.5 shadow-lg shadow-sky-500/20"
@@ -986,9 +1049,13 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                                     <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700 text-[10px] text-slate-300">
                                       {shot.shot_size}
                                     </span>
-                                    {shot.replication_action === "insert_product" && (
+                                    {shot.replication_action === "insert_product" ? (
                                       <span className="px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-[10px] text-emerald-300">
-                                        含商品
+                                        🔄 挂成品商品图
+                                      </span>
+                                    ) : (
+                                      <span className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-600 text-[10px] text-slate-300">
+                                        🚫 不传成品图
                                       </span>
                                     )}
                                   </div>
