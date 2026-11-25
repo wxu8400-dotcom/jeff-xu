@@ -41,6 +41,7 @@ from ..schemas import (
     GeneratedAssetOut,
     LockPlanRequest,
     ProductDNA,
+    PromptReviewResponse,
     RefineImageRequest,
     RefinedImagePromptResponse,
     RevisePlanRequest,
@@ -69,6 +70,7 @@ from ..services.prompts import (
     build_director_revision_prompt,
     build_image_refinement_prompt,
     build_prompt_audit_and_revision_prompt,
+    build_prompt_review_only_prompt,
 )
 from ..services.video_processor import is_ffmpeg_available, load_source_evidence_images
 from ..services.video_stitcher import stitch_media_items_to_mp4
@@ -769,6 +771,8 @@ def _merge_revision_into_analysis(
 
     if rev_res.prompt_audit_report is not None:
         updated_plan["prompt_audit_report"] = rev_res.prompt_audit_report.model_dump()
+    if rev_res.editing_guidelines is not None:
+        updated_plan["editing_guidelines"] = rev_res.editing_guidelines.model_dump()
     if rev_res.global_reference_prompt_cn.strip():
         updated_plan["global_reference_prompt_cn"] = rev_res.global_reference_prompt_cn.strip()
     if rev_res.global_reference_prompt_en.strip():
@@ -817,6 +821,85 @@ def _merge_revision_into_analysis(
     updated_plan["revision_history"] = new_history
     updated_dict["director_plan"] = updated_plan
     return updated_dict
+
+
+@router.post("/videos/{video_id}/review-prompt")
+async def review_product_replaced_prompt(
+    video_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    product_replaced_prompt_text: str = Form(default=""),
+    prompt_images: list[UploadFile] = File(default=[]),
+) -> dict[str, Any]:
+    """Step 2A (Review ONLY): User directly submits their ALREADY product-replaced prompt
+    (text and/or screenshots). Compare it against the persisted original video frames +
+    original video prompt + uploaded product photos and return structured review opinions +
+    editing guidelines WITHOUT overwriting the finalized plan yet."""
+    prompt_text = product_replaced_prompt_text.strip()
+    prompt_shots_bytes: list[tuple[bytes, str]] = []
+    for pf in (prompt_images or [])[:8]:
+        raw = await pf.read()
+        if not raw or len(raw) < 200:
+            continue
+        resized = _resize_jpeg(raw, max_side=1400, quality=85)
+        prompt_shots_bytes.append((resized, "image/jpeg"))
+
+    if not prompt_text and not prompt_shots_bytes:
+        raise HTTPException(
+            status_code=400,
+            detail="请先粘贴你替换商品后的提示词，或上传提示词截图",
+        )
+
+    cfg = get_settings()
+    video, session = _get_video_and_session(db, video_id)
+    ai = UnifiedAIClient(cfg)
+
+    try:
+        dna = ProductDNA.model_validate(
+            session.product_dna or {"product_name": session.product_name}
+        )
+    except Exception:
+        dna = ProductDNA(product_name=session.product_name)
+
+    curr_analysis = dict(video.analysis_json or {})
+    curr_plan = dict(curr_analysis.get("director_plan") or {})
+    source_ev_images, source_timestamps = _collect_source_evidence_for_audit(
+        video, curr_plan
+    )
+    product_refs, _ = _extract_product_ref_images(session)
+    selected_product_refs = product_refs[:3]
+
+    review_prompt = build_prompt_review_only_prompt(
+        product_dna=dna,
+        current_analysis=curr_analysis,
+        product_replaced_prompt_text=prompt_text,
+        source_frame_count=len(source_ev_images),
+        source_timestamps=source_timestamps,
+        prompt_screenshot_count=len(prompt_shots_bytes),
+        product_photo_count=len(selected_product_refs),
+    )
+
+    combined_images: list[tuple[bytes, str]] = (
+        source_ev_images + prompt_shots_bytes + selected_product_refs
+    )
+
+    try:
+        review_res, _usage = await ai.generate_structured(
+            prompt=review_prompt,
+            schema_cls=PromptReviewResponse,
+            tier="deep",
+            images=combined_images,
+            mock_context={"current_analysis": curr_analysis},
+        )
+    except Exception as exc:
+        logger.exception("Prompt review failed for video %s: %s", video_id, exc)
+        raise HTTPException(
+            status_code=502, detail=f"对照原片逐帧核对失败：{exc}"
+        ) from exc
+
+    return {
+        "ok": True,
+        "review": review_res.model_dump(),
+    }
 
 
 @router.post("/videos/{video_id}/audit-revise")

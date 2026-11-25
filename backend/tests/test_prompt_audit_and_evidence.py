@@ -73,7 +73,27 @@ def test_audit_revise_endpoint_with_screenshots_and_3part_output(make_client) ->
             time.sleep(0.15)
         assert video_id is not None
 
-        # 2. Submit reference prompt text + prompt screenshot + modification notes to /audit-revise
+        # 1.5 Step 2A: Review-only endpoint returns suggestions + editing_guidelines without mutating plan
+        review_resp = client.post(
+            f"/api/studio/videos/{video_id}/review-prompt",
+            data={
+                "product_replaced_prompt_text": "全片统一参考：9:16 竖屏写实沙发广告...\n镜头1：展示迷你沙发并抛出...",
+            },
+            files=[
+                (
+                    "prompt_images",
+                    ("codex_shot_1.jpg", _make_sample_jpeg((30, 30, 40)), "image/jpeg"),
+                ),
+            ],
+        )
+        assert review_resp.status_code == 200, review_resp.text
+        rev_body = review_resp.json()
+        assert rev_body["ok"] is True
+        assert len(rev_body["review"]["suggestions"]) >= 1
+        assert len(rev_body["review"]["editing_guidelines"]["generation_order"]) >= 1
+        assert len(rev_body["review"]["editing_guidelines"]["final_qa_checklist"]) >= 1
+
+        # 2. Step 2B: Apply confirmed suggestions -> returns 4-part split package
         audit_resp = client.post(
             f"/api/studio/videos/{video_id}/audit-revise",
             data={
@@ -98,6 +118,8 @@ def test_audit_revise_endpoint_with_screenshots_and_3part_output(make_client) ->
         assert plan["global_reference_prompt_cn"]
         assert plan["negative_constraints"]
         assert plan["prompt_audit_report"]["summary"]
+        assert plan["editing_guidelines"] is not None
+        assert len(plan["editing_guidelines"]["generation_order"]) >= 1
         assert len(body["analysis_json"]["storyboard"]) >= 1
         assert len(body["analysis_json"]["kling_prompts"]) >= 1
 

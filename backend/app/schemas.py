@@ -73,6 +73,29 @@ class StoryboardShot(BaseModel):
     has_person: bool = False
 
 
+class EditingGuidelines(BaseModel):
+    generation_order: list[str] = Field(default_factory=list)
+    transition_tips: list[str] = Field(default_factory=list)
+    audio_and_overlay_tips: list[str] = Field(default_factory=list)
+    final_qa_checklist: list[str] = Field(default_factory=list)
+
+
+class PromptReviewSuggestion(BaseModel):
+    id: str = "fix_1"
+    target_area: str = ""
+    issue: str = ""
+    suggestion: str = ""
+    priority: str = "high"  # "high" | "medium"
+
+
+class PromptReviewResponse(BaseModel):
+    verdict: str = "minor_gaps"  # "accurate" | "minor_gaps" | "major_mismatch"
+    summary: str = ""
+    matched_points: list[str] = Field(default_factory=list)
+    suggestions: list[PromptReviewSuggestion] = Field(default_factory=list)
+    editing_guidelines: EditingGuidelines = Field(default_factory=EditingGuidelines)
+
+
 class PromptAuditReport(BaseModel):
     verdict: str = "verified"  # "accurate" | "minor_gaps" | "major_mismatch" | "verified"
     summary: str = ""
@@ -91,6 +114,7 @@ class DirectorPlan(BaseModel):
     current_master_prompt_en: str = ""
     negative_constraints: str = ""
     prompt_audit_report: PromptAuditReport | None = None
+    editing_guidelines: EditingGuidelines | None = None
     has_user_customized: bool = False
     keyframe_previews: list[str] = Field(default_factory=list)
     keyframe_timestamps: list[float] = Field(default_factory=list)
@@ -167,6 +191,7 @@ class DirectorRevisionResponse(BaseModel):
     director_reply: str = ""
     changed_shots: list[int] = Field(default_factory=list)
     prompt_audit_report: PromptAuditReport | None = None
+    editing_guidelines: EditingGuidelines | None = None
     global_reference_prompt_cn: str = ""
     global_reference_prompt_en: str = ""
     current_master_prompt_cn: str = ""

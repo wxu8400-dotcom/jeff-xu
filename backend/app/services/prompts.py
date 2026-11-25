@@ -426,6 +426,124 @@ def build_director_revision_prompt(
 }}"""
 
 
+def build_prompt_review_only_prompt(
+    *,
+    product_dna: ProductDNA,
+    current_analysis: dict[str, Any],
+    product_replaced_prompt_text: str,
+    source_frame_count: int,
+    source_timestamps: list[float],
+    prompt_screenshot_count: int,
+    product_photo_count: int,
+) -> str:
+    """Step 2A (Review ONLY): User directly supplies their ALREADY product-replaced prompt
+    (text and/or screenshots). Compare it against the REAL original video frames + original
+    video prompt + uploaded product photos, and return actionable critique & editing guidelines
+    WITHOUT rewriting yet — waiting for the user to confirm which fixes to apply."""
+    curr_plan = dict(current_analysis.get("director_plan") or {})
+    orig_cn = str(
+        curr_plan.get("original_video_prompt_cn")
+        or curr_plan.get("original_plot_summary")
+        or ""
+    )
+    ts_summary = (
+        ", ".join(f"{t:.2f}s" for t in source_timestamps[:16])
+        if source_timestamps
+        else "已按原片时间轴均匀采样"
+    )
+    dna_json = json.dumps(
+        {
+            "product_name": product_dna.product_name,
+            "category": product_dna.category,
+            "physical_form": product_dna.physical_form,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    image_index_lines: list[str] = []
+    cursor = 1
+    if source_frame_count > 0:
+        image_index_lines.append(
+            f"- 第 {cursor} ~ {cursor + source_frame_count - 1} 张图：【原视频逐帧真实画面证据】（带精确秒数水印的全片接触表 + 高清切镜帧，时间轴：{ts_summary}）"
+        )
+        cursor += source_frame_count
+    if prompt_screenshot_count > 0:
+        image_index_lines.append(
+            f"- 第 {cursor} ~ {cursor + prompt_screenshot_count - 1} 张图：【用户直接提交的“替换商品后”提示词截图】"
+        )
+        cursor += prompt_screenshot_count
+    if product_photo_count > 0:
+        image_index_lines.append(
+            f"- 第 {cursor} ~ {cursor + product_photo_count - 1} 张图：【用户待替换商品的多角度实拍图】"
+        )
+    image_map_text = "\n".join(image_index_lines) if image_index_lines else "（依据文字基准比对）"
+
+    return f"""你是顶级 AI 视频导演与提示词逐帧审核专家。
+用户已经自己写好了**替换商品后的完整提示词**（可能一次性粘贴了全片参考 + 全部分镜 + 约束，或上传了提示词截图）。
+请你**先不要重写终稿**，而是严格将用户提交的「替换商品后的提示词」与【原视频逐帧真实画面】、【系统解析的原视频提示词】以及【上传的多角度商品图】逐段交叉比对，**给出客观、可勾选采纳的修改意见**，同时给出一份清晰的**生成与剪辑注意事项及重点**！
+
+【随附图片精确索引】
+{image_map_text}
+
+【核对维度（只挑真正影响成片还原度的问题，不吹毛求疵）】
+1. **原片关键转场与节奏核对**：对照原片逐帧画面，检查用户提示词有没有漏掉关键转场（如前景遮挡转场、抛投轨迹、爆发/回切瞬间）或机位/景别不一致；
+2. **产品外观与物理一致性核对**：对照上传的商品实拍图，检查提示词对商品颜色、比例、材质、配件的描述是否准确，以及有没有容易导致穿模/变形/尺寸跳变的写法；
+3. **逐镜可控性核对**：检查是否存在单镜动作塞太多（可灵 5 秒跑不完）、或每镜重复塞入整套剧情导致模型混乱的问题；
+4. **生成与剪辑注意事项及重点（`editing_guidelines`）**：
+   - `generation_order`：推荐逐镜生图与生视频的先后顺序（如先定首尾核心镜确认产品与人物一致，再逐镜单步生成，每次只输入当前镜头动作，不重复粘贴整套剧情）；
+   - `transition_tips`：剪辑时的关键衔接点（如用烟雾/前景遮挡接哪两镜、哪一镜的尾帧可直接做下一镜首帧）；
+   - `audio_and_overlay_tips`：音效层次设计建议 + Logo/产品名/联系方式在剪辑阶段叠加的最佳落点；
+   - `final_qa_checklist`：最终成片 4 项核心验收红线（如产品未变款、人物未换脸、运动方向连续、结尾完整清晰展示产品）。
+
+目标商品信息：
+{dna_json}
+
+系统解析的原视频基准提示词：
+{orig_cn or "（请直接以随附原视频逐帧证据图为准）"}
+
+用户直接提交的「替换商品后」提示词文本：
+{product_replaced_prompt_text or "（无纯文本，请逐字阅读上方用户提交的提示词截图）"}
+
+请严格输出纯 JSON（不要附加任何多余文字）：
+{{
+  "verdict": "minor_gaps",
+  "summary": "2~3句直白总结：你的替换版提示词整体结构如何，对照原视频逐帧发现了哪几处建议优化的点。",
+  "matched_points": [
+    "核对无误点1（如：开场与结尾的核心视觉落点与原片一致）",
+    "核对无误点2"
+  ],
+  "suggestions": [
+    {{
+      "id": "fix_1",
+      "target_area": "镜头③ 喷发与转场",
+      "issue": "指出与原视频逐帧画面或生图/可灵物理规律不符的具体问题",
+      "suggestion": "给出明确可落地的修改方案（用户勾选后系统就会按这条自动修改）",
+      "priority": "high"
+    }}
+  ],
+  "editing_guidelines": {{
+    "generation_order": [
+      "先制作首尾关键镜的关键帧，确认产品外观与人物形象 100% 一致后再继续生成其余镜头。",
+      "逐镜头生成短视频，每次只输入当前镜头动作，不要把整套剧情重复粘贴进去。"
+    ],
+    "transition_tips": [
+      "前镜尾帧若准确，可直接作为下一镜首帧保持空间位置一致。",
+      "剪辑时利用烟雾、快速运动或前景产品遮挡衔接相邻转场镜头。"
+    ],
+    "audio_and_overlay_tips": [
+      "后期按画面节奏补入环境风声、转场冲击声、落地声与人物情绪声。",
+      "Logo、产品名和联系方式在剪辑阶段叠加在最后稳定展示产品的画面上。"
+    ],
+    "final_qa_checklist": [
+      "产品没有变款、颜色与纹理一致",
+      "人物没有换脸、发型服装统一",
+      "主体运动方向与空间关系连续",
+      "结尾留足时间完整清晰展示产品"
+    ]
+  }}
+}}"""
+
+
 def build_prompt_audit_and_revision_prompt(
     *,
     product_dna: ProductDNA,
@@ -521,6 +639,7 @@ def build_prompt_audit_and_revision_prompt(
    - **关键原则（先定静态关键帧，再写图生视频动态）**：
      - 每一行镜头必须拆清楚：**（A）关键帧图片内容**（用于先生成静态首帧图供用户确认）和 **（B）图生视频动态提示词**（用于拿确认好的首帧图交给可灵 Kling I2V 动起来）！
      - `storyboard[i]`：写出清晰的 `shot_no`（1..N）、`time_range`（建议成片时长，如 `约3秒`、`约2秒`）、`shot_size`、`camera_movement`、`original_visual`（对应原片哪一拍）、`adapted_visual_for_product`（修改后的镜头摘要，含镜头短标题如「展示并抛出」）、`has_person`、`replication_action`（出现目标商品标 `"insert_product"`，纯环境/无商品过渡标 `"keep_scene"`）。
+     - **重要：严格逐镜拆分隔离！** 用户是一次性粘贴全部提示词给你的，你在拆分输出 `chatgpt_images_prompts[1..N]` 和 `kling_prompts[0..N-1]` 时，**每个镜头只能写当前这一镜头的独立关键帧和独立动作，绝不能把整套剧情重复粘贴进每个镜头！**
      - `chatgpt_images_prompts`：
        - **索引 0**：主视觉海报（封面图）；
        - **索引 1..N**：严格一一对应镜头 1..N 的**关键帧图片内容**！
@@ -529,14 +648,20 @@ def build_prompt_audit_and_revision_prompt(
        - `prompt_en` 写完整的照片级写实英文生图提示词（自动带上 `global_reference_prompt_en` 的统一人物与商品外观锚定，写明 `Keep the exact product from the uploaded reference images, ignoring any background clutter from the product photos`，严禁卡通/动漫/文字/水印）。
      - `kling_prompts`：
        - **索引 0..N-1**：严格一一对应镜头 1..N 的**图生视频（I2V）动态提示词**！
-       - `prompt_cn` 写可直接复制给可灵的中文动态指令（明确“保持首帧人物与产品外观不变”+ 清晰的物理动作轨迹、镜头跟随方向、速度变化、遮挡/转场收尾）；
+       - `prompt_cn` 写可直接复制给可灵的中文动态指令（明确“保持首帧人物与产品外观不变”+ 仅限当前镜头的清晰物理动作轨迹、镜头跟随方向、速度变化、遮挡/转场收尾）；
        - `prompt_en` 写对应的英文可灵 I2V 动态指令；
        - `negative_prompt` 直接填入第三部分的统一排除约束！
 
 3. **第三部分：每段附加同一组统一约束（`negative_constraints`）**
    - 凝练成一段可直接附在每段提示词或负向框里的统一防穿帮约束（例如：避免产品换款、颜色漂移、纹理消失、配件增减、生成多余产品、产品解体变形、人物换脸、手指畸形、穿模、场景漂移、画面出现文字或水印）。
 
-4. **同时拼装完整总览版（`current_master_prompt_cn` / `current_master_prompt_en`）**
+4. **第四部分：生成与剪辑注意事项及重点（`editing_guidelines`）**
+   - `generation_order`：2~3 条推荐的逐镜生图与生视频顺序（例如先做首尾核心关键帧确认产品与人物一致 → 再逐镜单步生成，每次只输入当前镜头动作）；
+   - `transition_tips`：2~3 条剪辑拼接与转场衔接重点（例如哪两镜用烟雾/前景遮挡衔接、哪镜尾帧可复用作下镜首帧）；
+   - `audio_and_overlay_tips`：2 条音效设计与 Logo/产品名/联系方式后期叠加落点建议；
+   - `final_qa_checklist`：4 条最终成片必查红线（如产品未变款、人物未换脸、运动方向连续、结尾完整清晰展示产品，以及奇幻画面防误导说明）。
+
+5. **同时拼装完整总览版（`current_master_prompt_cn` / `current_master_prompt_en`）**
    - 把第一部分 + 第二部分完整分镜节奏 + 第三部分整理成一份排版清晰、可直接整段复制的完整总提示词。
 
 目标商品信息：
@@ -574,6 +699,26 @@ def build_prompt_audit_and_revision_prompt(
     "fixes_applied": [
       "在对应镜头补入前景遮挡转场动作，保证前后镜头无缝衔接",
       "已结合上传商品多角度实拍图锁定外观材质与细节"
+    ]
+  }},
+  "editing_guidelines": {{
+    "generation_order": [
+      "先制作首尾关键镜的关键帧，确认产品外观与人物形象一致后再继续其余镜头。",
+      "逐镜头生成短视频，每次只输入当前镜头动作，不要把整套剧情重复粘贴进去。"
+    ],
+    "transition_tips": [
+      "前一镜尾帧准确时，可直接作为下一镜首帧保持位置一致。",
+      "剪辑时利用烟雾或前景主体遮挡自然连接相邻转场镜头。"
+    ],
+    "audio_and_overlay_tips": [
+      "后期按节奏补入环境风声、高潮音效与人物自然情绪声。",
+      "Logo、产品名与联系方式在剪辑阶段叠加在最后稳定展示产品的画面上。"
+    ],
+    "final_qa_checklist": [
+      "产品没有变款、颜色材质一致",
+      "人物没有换脸、服装发型统一",
+      "主体运动方向与空间关系连续",
+      "结尾完整清晰展示产品"
     ]
   }},
   "global_reference_prompt_cn": "第一部分：全片统一参考提示词（画幅质感 + 产品外观严格锚定 + 统一人物设定 + 统一场景与空间关系 + 光影与无文字水印要求）",

@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertTriangle,
-  ArrowDownToLine,
   Brain,
   CheckCircle2,
   ChevronDown,
@@ -10,9 +9,11 @@ import {
   Edit3,
   Film,
   ImagePlus,
+  ListChecks,
   Loader2,
   Lock,
   Plus,
+  Scissors,
   SearchCheck,
   ShieldAlert,
   Sparkles,
@@ -23,7 +24,12 @@ import {
 } from "lucide-react";
 import { api } from "../api/client";
 import { copyText } from "../utils/copy";
-import type { DirectorMemoryItem, VideoDeepAnalysis, VideoRecord } from "../types/radar";
+import type {
+  DirectorMemoryItem,
+  PromptReviewResponse,
+  VideoDeepAnalysis,
+  VideoRecord,
+} from "../types/radar";
 
 interface Props {
   video: VideoRecord;
@@ -49,11 +55,11 @@ const VERDICT_META: Record<string, { label: string; cls: string }> = {
     cls: "bg-emerald-500/20 border-emerald-400/50 text-emerald-200",
   },
   minor_gaps: {
-    label: "🔧 发现局部遗漏 · 已按原片逐帧自动补全",
+    label: "🔧 发现局部可优化项 · 建议确认以下意见",
     cls: "bg-amber-500/20 border-amber-400/50 text-amber-200",
   },
   major_mismatch: {
-    label: "⚠️ 发现关键镜头偏差 · 已按原片逐帧纠偏",
+    label: "⚠️ 发现关键镜头偏差 · 强烈建议按以下意见修正",
     cls: "bg-rose-500/20 border-rose-400/50 text-rose-200",
   },
 };
@@ -69,15 +75,16 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
   const isLocked = plan?.revision_status === "locked";
   const hasCustomized = Boolean(plan?.has_user_customized);
 
-  // Box 1: Original Video Frame-by-Frame Reference
+  // Box 1: Original Video Frame-by-Frame Reference (collapsed by default so UI stays clean)
   const originalPromptCn =
     plan?.original_video_prompt_cn ||
     plan?.original_plot_summary ||
     (analysis?.storyboard || []).map((s) => s.original_visual).filter(Boolean).join("；") ||
     "正在读取原视频逐帧画面...";
 
-  // Box 3: 3-Part Structured Output
+  // Box 3: 4-Part Structured Output
   const auditReport = plan?.prompt_audit_report || null;
+  const editingGuidelines = plan?.editing_guidelines || null;
   const globalRefCn = plan?.global_reference_prompt_cn || "";
   const revisedPromptCn = plan?.current_master_prompt_cn || "";
   const revisedPromptEn = plan?.current_master_prompt_en || "";
@@ -94,11 +101,19 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
 
   const [expanded, setExpanded] = useState(true);
   const [showOriginalBox, setShowOriginalBox] = useState(false);
-  const [referencePromptText, setReferencePromptText] = useState("");
+
+  // Step 2A: Direct Product-Replaced Prompt Input -> Review ONLY
+  const [productReplacedPrompt, setProductReplacedPrompt] = useState("");
   const [promptImages, setPromptImages] = useState<File[]>([]);
-  const [modificationNotes, setModificationNotes] = useState("");
-  const [revising, setRevising] = useState(false);
-  const [reviseError, setReviseError] = useState("");
+  const [reviewing, setReviewing] = useState(false);
+  const [reviewError, setReviewError] = useState("");
+  const [reviewResult, setReviewResult] = useState<PromptReviewResponse | null>(null);
+  const [selectedFixIds, setSelectedFixIds] = useState<Record<string, boolean>>({});
+  const [extraConfirmNote, setExtraConfirmNote] = useState("");
+
+  // Step 2B: Apply Confirmed Fixes -> Finalize 4-Part Split Prompt Package
+  const [applying, setApplying] = useState(false);
+  const [applyError, setApplyError] = useState("");
   const [locking, setLocking] = useState(false);
   const [showCombinedMaster, setShowCombinedMaster] = useState(false);
   const [showEnglishPrompt, setShowEnglishPrompt] = useState(false);
@@ -107,7 +122,7 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
   const [manualConstraints, setManualConstraints] = useState(negativeConstraints);
 
   const promptImgInputRef = useRef<HTMLInputElement | null>(null);
-  const refTextInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const reviewBoxRef = useRef<HTMLDivElement | null>(null);
   const revisedBoxRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -169,7 +184,7 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
       });
       setNewRuleText("");
       await loadMemories();
-      onToast("🧠 已记入长期记忆库，后续所有视频核对与改写都会自动运用！");
+      onToast("🧠 已记入长期记忆库！");
     } catch (err) {
       onToast(err instanceof Error ? err.message : "保存记忆失败");
     } finally {
@@ -196,50 +211,97 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
     }
   };
 
-  const handleLoadToRefEditor = (text: string, label: string) => {
-    setReferencePromptText(text);
-    setReviseError("");
-    onToast(`已将${label}载入参考提示词框`);
-    setTimeout(() => {
-      refTextInputRef.current?.focus();
-    }, 50);
-  };
-
   const handleCopy = async (text: string, label: string) => {
     const ok = await copyText(text);
     if (ok) onToast(`已复制${label}`);
   };
 
-  const handleAuditAndGenerate = async () => {
-    const cleanRef = referencePromptText.trim();
-    const cleanMod = modificationNotes.trim();
-    if (!cleanRef && !cleanMod && promptImages.length === 0) {
-      onToast("请至少上传参考提示词截图、粘贴参考提示词，或写下你想修改的内容");
+  // Step 2A: Compare user's product-replaced prompt vs original video -> Review Opinions ONLY
+  const handleRunReview = async () => {
+    const cleanPrompt = productReplacedPrompt.trim();
+    if (!cleanPrompt && promptImages.length === 0) {
+      onToast("请先粘贴你替换商品后的提示词，或上传提示词截图");
       return;
     }
-    setRevising(true);
-    setReviseError("");
+    setReviewing(true);
+    setReviewError("");
+    setApplyError("");
+    try {
+      const resp = await api.reviewProductReplacedPrompt(video.id, {
+        productReplacedPromptText: cleanPrompt,
+        promptImages,
+      });
+      setReviewResult(resp.review);
+      const defaults: Record<string, boolean> = {};
+      (resp.review.suggestions || []).forEach((s) => {
+        defaults[s.id] = true;
+      });
+      setSelectedFixIds(defaults);
+      onToast("🔍 已对照原视频逐帧完成比对！请查看下方核对意见并勾选要修改的项");
+      setTimeout(() => {
+        reviewBoxRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }, 100);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "对照原片核对失败";
+      setReviewError(msg);
+      onToast(msg);
+    } finally {
+      setReviewing(false);
+    }
+  };
+
+  // Step 2B: Apply ONLY the user-confirmed suggestions & split into shot-by-shot 4-part package
+  const handleApplyConfirmedFixes = async (skipAllSuggestions = false) => {
+    const cleanPrompt = productReplacedPrompt.trim();
+    if (!cleanPrompt && promptImages.length === 0) {
+      onToast("请先提交你替换商品后的提示词");
+      return;
+    }
+
+    const pickedLines: string[] = [];
+    if (!skipAllSuggestions && reviewResult?.suggestions) {
+      reviewResult.suggestions.forEach((s) => {
+        if (selectedFixIds[s.id]) {
+          pickedLines.push(`- 【${s.target_area}】${s.suggestion}`);
+        }
+      });
+    }
+    const extra = extraConfirmNote.trim();
+    let modInstruction = "";
+    if (pickedLines.length > 0 || extra) {
+      modInstruction = [
+        "【请严格以用户提交的“替换商品后提示词”为底稿，只修改以下用户确认采纳的意见，其余内容 100% 保留并按逐个独立镜头拆分（每次只写当前镜头动作，不重复塞入整套剧情）】：",
+        ...pickedLines,
+        extra ? `- 【用户额外补充】${extra}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    } else {
+      modInstruction =
+        "【无需改动剧情，100% 忠实保留用户提交的“替换商品后提示词”，严格拆分为独立逐镜的关键帧生图提示词 + 可灵单镜动态提示词 + 统一约束 + 生成与剪辑重点】";
+    }
+
+    setApplying(true);
+    setApplyError("");
     try {
       const resp = await api.auditRevisePrompt(video.id, {
-        referencePromptText: cleanRef,
-        modificationNotes: cleanMod,
+        referencePromptText: cleanPrompt,
+        modificationNotes: modInstruction,
         promptImages,
       });
       setManualEditing(false);
       onAnalysisUpdated(resp.analysis_json);
       await loadMemories();
-      const memCount = resp.learned_memories?.length || 0;
-      const memHint = memCount > 0 ? `（并记住 ${memCount} 条偏好 🧠）` : "";
-      onToast(`✅ 已对照原片逐帧完成核对并生成新版三段式提示词${memHint}`);
+      onToast("✅ 已按你确认的意见完成修改，并已逐镜拆分为四段式可执行提示词！");
       setTimeout(() => {
         revisedBoxRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
       }, 120);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "逐帧核对并生成提示词失败";
-      setReviseError(msg);
+      const msg = err instanceof Error ? err.message : "按确认意见生成失败";
+      setApplyError(msg);
       onToast(msg);
     } finally {
-      setRevising(false);
+      setApplying(false);
     }
   };
 
@@ -256,11 +318,11 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
       setManualEditing(false);
       onAnalysisUpdated(resp.analysis_json);
       if (nextLocked) {
-        onToast("✅ 三段式提示词已确认定稿！现在可以直接在下方开始生成关键帧图与可灵视频");
+        onToast("✅ 提示词已确认定稿！请在下方按逐个分镜依次生成关键帧图与可灵视频");
         onConfirmedGenerate?.();
       } else {
         setExpanded(true);
-        onToast("已解锁提示词，你可以继续核对或修改");
+        onToast("已解锁提示词，你可以继续核对或微调");
       }
     } catch (err) {
       onToast(err instanceof Error ? err.message : "确认操作失败");
@@ -269,7 +331,10 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
     }
   };
 
-  const verdictInfo = auditReport
+  const reviewVerdictInfo = reviewResult
+    ? VERDICT_META[reviewResult.verdict] || VERDICT_META.minor_gaps
+    : null;
+  const auditVerdictInfo = auditReport
     ? VERDICT_META[auditReport.verdict] || VERDICT_META.minor_gaps
     : null;
 
@@ -295,25 +360,29 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
           )}
           <div className="min-w-0">
             <div className="text-sm font-bold text-white flex flex-wrap items-center gap-2">
-              <span>步骤 1：原片逐帧阅读 → 提示词比对核对 → 三段式新提示词定稿</span>
+              <span>步骤 1：直接贴替换商品后的提示词 → 对照原片给意见 → 确认后拆分逐镜</span>
               <span
                 className={`px-2 py-0.5 rounded-full text-[11px] font-semibold border ${
                   isLocked
                     ? "bg-emerald-500/20 border-emerald-400/50 text-emerald-200"
                     : hasCustomized
                     ? "bg-sky-500/20 border-sky-400/50 text-sky-200"
-                    : "bg-amber-500/20 border-amber-400/50 text-amber-200"
+                    : reviewResult
+                    ? "bg-amber-500/20 border-amber-400/50 text-amber-200"
+                    : "bg-slate-800 border-slate-700 text-slate-300"
                 }`}
               >
                 {isLocked
-                  ? "✓ 已确认定稿（下方可生图确认与做视频）"
+                  ? "✓ 已定稿 · 下方逐镜单独生成"
                   : hasCustomized
-                  ? "已逐帧核对并生成三段式提示词 · 请确认"
-                  : "已读取原片逐帧画面 · 请提交提示词与修改意见"}
+                  ? "已拆分逐镜四段式提示词 · 请确认"
+                  : reviewResult
+                  ? "已出逐帧核对意见 · 请勾选确认"
+                  : "已逐帧读取原视频 · 请直接粘贴替换商品后的提示词"}
               </span>
             </div>
             <p className="text-[11px] text-slate-400 mt-0.5">
-              系统已对原视频执行切镜检测 + 逐帧存档。提交你的参考提示词（文字/截图）与修改内容，AI 会对照原片逐帧核对纠偏，并输出「统一参考 + 可控分镜表 + 统一约束」三段式提示词。
+              无需复制原视频提示词！直接贴入你替换好商品的提示词（可一次性粘全部分镜）→ AI 对照原片逐帧先给意见 → 你勾选确认后自动修改并拆成逐个独立分镜 + 剪辑重点。
             </p>
           </div>
           {expanded ? (
@@ -361,15 +430,15 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
               <div>
                 <div className="text-purple-200 font-bold flex items-center gap-1.5">
                   <Brain className="w-4 h-4 text-purple-400" />
-                  AI 长期记忆库（越聊越懂你的替换手法与审美偏好）
+                  AI 长期记忆库
                 </div>
                 <p className="text-[11px] text-slate-400 mt-0.5">
-                  每次修改都会自动提炼你的人物审美、场景调性与商品替换巧思，以后新视频核对改写时自动参考。
+                  每次修改都会自动提炼你的替换手法与审美偏好，后续核对与拆分时自动参考。
                 </p>
               </div>
               {memories.length === 0 ? (
                 <div className="text-[11px] text-slate-400 bg-slate-950/60 rounded-lg px-3 py-2.5">
-                  暂无记忆。在下方提交一次修改想法，或手动添加一条偏好，系统就会自动记住！
+                  暂无记忆。
                 </div>
               ) : (
                 <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
@@ -436,7 +505,7 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                   type="text"
                   value={newRuleText}
                   onChange={(e) => setNewRuleText(e.target.value)}
-                  placeholder="手动添加一条长期偏好（如：优先使用真实电影摄影质感+清晰产品主体）"
+                  placeholder="手动添加一条长期偏好..."
                   className="flex-1 min-w-[180px] px-2.5 py-1.5 rounded-lg bg-slate-950 border border-slate-700 text-[11px] text-slate-100 placeholder-slate-500"
                 />
                 <button
@@ -452,32 +521,20 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
             </div>
           )}
 
-          {/* BOX 1: Original Video Real Timestamped Filmstrip + Collapsible Initial Transcript */}
+          {/* BOX 1: Original Video Real Timestamped Filmstrip (Reference Baseline) */}
           <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-3.5 space-y-2.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <span className="px-2.5 py-0.5 rounded-md font-bold text-[11px] bg-sky-500/20 border border-sky-500/40 text-sky-300 inline-flex items-center gap-1">
-                  <Film className="w-3.5 h-3.5" />
-                  ① 原视频已逐帧读取存档（共 {keyframes.length || 1} 帧切镜证据，核对时 AI 将直接对照真实原片画面）
-                </span>
-              </div>
-              <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-                <button
-                  type="button"
-                  onClick={() => handleLoadToRefEditor(originalPromptCn, "系统初版原片描述")}
-                  className="px-2.5 py-1 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-sky-400/40 text-sky-200 font-semibold inline-flex items-center gap-1"
-                >
-                  <ArrowDownToLine className="w-3 h-3" />
-                  载入初版原片描述
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowOriginalBox((v) => !v)}
-                  className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300"
-                >
-                  {showOriginalBox ? "收起初版描述" : "查看系统初版描述"}
-                </button>
-              </div>
+              <span className="px-2.5 py-0.5 rounded-md font-bold text-[11px] bg-sky-500/20 border border-sky-500/40 text-sky-300 inline-flex items-center gap-1">
+                <Film className="w-3.5 h-3.5" />
+                ① 原视频已逐帧存档（{keyframes.length || 1} 帧切镜证据 · 比对时 AI 自动对照原片）
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowOriginalBox((v) => !v)}
+                className="px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 text-[11px]"
+              >
+                {showOriginalBox ? "收起原片解析词" : "查看原片解析词"}
+              </button>
             </div>
 
             {keyframes.length > 0 && (
@@ -495,7 +552,7 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                       <img
                         src={src}
                         alt={`原片画面 ${idx + 1}`}
-                        className="h-24 w-auto rounded-lg border border-slate-700 object-cover"
+                        className="h-20 w-auto rounded-lg border border-slate-700 object-cover"
                       />
                       <span className="absolute bottom-1 left-1 px-1.5 py-0.5 rounded bg-black/75 text-[10px] font-mono text-sky-200">
                         {label}
@@ -507,91 +564,66 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
             )}
 
             {showOriginalBox && (
-              <div className="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap bg-slate-900/70 rounded-xl p-3 border border-slate-800/80 max-h-60 overflow-y-auto">
+              <div className="text-xs text-slate-300 leading-relaxed whitespace-pre-wrap bg-slate-900/70 rounded-xl p-3 border border-slate-800/80 max-h-56 overflow-y-auto">
                 {originalPromptCn}
               </div>
             )}
           </div>
 
-          {/* BOX 2: Submit Reference Prompt (Text + Screenshots) & Modification Requirements */}
+          {/* BOX 2: Directly Paste Product-Replaced Prompt (Single Clean Input -> Review Opinions First!) */}
           <div className="bg-slate-950/95 border border-sky-500/45 rounded-xl p-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="px-2.5 py-0.5 rounded-md font-bold text-[11px] bg-amber-500/20 border border-amber-500/40 text-amber-200">
-                ② 提交你的参考提示词（文字或截图）+ 修改内容 → AI 对照原片逐帧核对并改写
+                ② 直接贴入你「替换商品后」的提示词（可一次性粘全部分镜，或上传截图）
               </span>
-              {hasCustomized && globalRefCn && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    handleLoadToRefEditor(
-                      revisedPromptCn || globalRefCn,
-                      "上一版核对后提示词"
-                    )
-                  }
-                  className="text-[11px] text-sky-400 hover:text-sky-300"
-                >
-                  载入上一版继续微调
-                </button>
-              )}
+              <span className="text-[11px] text-slate-400">
+                无需复制原视频提示词 · 先由 AI 对照原片逐帧给意见
+              </span>
             </div>
 
-            {reviseError && (
+            {reviewError && (
               <div className="rounded-xl bg-rose-500/15 border border-rose-500/40 px-3 py-2 text-xs text-rose-200">
-                核对生成失败：{reviseError}（请重试）
+                逐帧比对失败：{reviewError}（请重试）
               </div>
             )}
 
-            {/* Sub-section 2A: Reference Prompt (Screenshots + Text) */}
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <label className="block text-[11px] font-semibold text-slate-300">
-                  A. 你的参考提示词（可选：直接粘贴三段式文本，或在下方上传提示词截图）
-                </label>
-                <textarea
-                  ref={refTextInputRef}
-                  rows={5}
-                  value={referencePromptText}
-                  onChange={(e) => setReferencePromptText(e.target.value)}
-                  placeholder="把你手头的参考提示词（如全片统一参考 + 分镜表 + 约束，或 Codex 拆解的文本）粘贴在这里；也可以留空只传截图或直接写右侧修改要求..."
-                  className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 focus:border-sky-400 focus:outline-none text-xs text-slate-100 placeholder-slate-500 leading-relaxed"
+            <textarea
+              rows={7}
+              value={productReplacedPrompt}
+              onChange={(e) => setProductReplacedPrompt(e.target.value)}
+              placeholder="直接把你替换好商品的完整提示词（全片统一参考 + 全部分镜提示词 + 统一约束）一次性粘贴在这里即可；下方也可补充上传提示词截图..."
+              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 focus:border-sky-400 focus:outline-none text-xs sm:text-sm text-slate-100 placeholder-slate-500 leading-relaxed"
+            />
+
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => promptImgInputRef.current?.click()}
+                  className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-dashed border-sky-500/50 text-[11px] text-sky-200 font-semibold inline-flex items-center gap-1.5"
+                >
+                  <ImagePlus className="w-3.5 h-3.5 text-sky-400" />
+                  上传提示词截图（{promptImages.length}/8）
+                </button>
+                <input
+                  ref={promptImgInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    handleAddPromptImages(e.target.files);
+                    e.target.value = "";
+                  }}
                 />
-
-                {/* Prompt Screenshot Uploader */}
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => promptImgInputRef.current?.click()}
-                    className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-dashed border-sky-500/50 text-[11px] text-sky-200 font-semibold inline-flex items-center gap-1.5"
-                  >
-                    <ImagePlus className="w-3.5 h-3.5 text-sky-400" />
-                    上传参考提示词截图（{promptImages.length}/8）
-                  </button>
-                  <input
-                    ref={promptImgInputRef}
-                    type="file"
-                    accept="image/*"
-                    multiple
-                    className="hidden"
-                    onChange={(e) => {
-                      handleAddPromptImages(e.target.files);
-                      e.target.value = "";
-                    }}
-                  />
-                  {promptImages.length > 0 && (
-                    <span className="text-[11px] text-emerald-300">
-                      已选 {promptImages.length} 张截图，提交时将与原片逐帧同屏核对
-                    </span>
-                  )}
-                </div>
-
                 {promptImages.length > 0 && (
                   <div className="flex flex-wrap gap-1.5">
                     {promptImages.map((f, idx) => (
                       <span
                         key={`${f.name}-${idx}`}
-                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-900 border border-slate-700 text-[11px] text-slate-200"
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-900 border border-slate-700 text-[11px] text-slate-200"
                       >
-                        <span className="max-w-[140px] truncate">{f.name}</span>
+                        <span className="max-w-[120px] truncate">{f.name}</span>
                         <button
                           type="button"
                           onClick={() => handleRemovePromptImage(idx)}
@@ -605,55 +637,169 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                 )}
               </div>
 
-              {/* Sub-section 2B: User Modification Notes */}
-              <div className="space-y-2 flex flex-col">
-                <label className="block text-[11px] font-semibold text-slate-300">
-                  B. 你想修改的内容（替换商品、人物/场景调整、时长节奏等）
-                </label>
-                <textarea
-                  rows={6}
-                  value={modificationNotes}
-                  onChange={(e) => setModificationNotes(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                      e.preventDefault();
-                      handleAuditAndGenerate();
-                    }
-                  }}
-                  placeholder="例如：把原片里的主角物品换成我上传的多角度商品，保持原片动作节奏和转场逻辑；如果原参考提示词有漏掉原片的关键转场，请按原视频逐帧帮我补齐修正..."
-                  className="flex-1 w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 focus:border-sky-400 focus:outline-none text-xs text-slate-100 placeholder-slate-500 leading-relaxed"
-                />
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
-              <span className="text-[11px] text-slate-400">
-                AI 会同时读取「原片带时间戳接触表 + 关键切镜帧 + 你的参考提示词 + 商品多角度图」，先核对纠偏再输出新版三段式提示词
-              </span>
               <button
                 type="button"
                 disabled={
-                  revising ||
-                  (!referencePromptText.trim() &&
-                    !modificationNotes.trim() &&
-                    promptImages.length === 0)
+                  reviewing || (!productReplacedPrompt.trim() && promptImages.length === 0)
                 }
-                onClick={handleAuditAndGenerate}
+                onClick={handleRunReview}
                 className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-sky-500 to-cyan-400 hover:from-sky-400 hover:to-cyan-300 disabled:opacity-50 text-slate-950 font-bold text-xs inline-flex items-center gap-1.5 shadow-lg shadow-sky-500/20"
               >
-                {revising ? (
+                {reviewing ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
                 ) : (
                   <SearchCheck className="w-4 h-4" />
                 )}
-                {revising
-                  ? "正在对照原片逐帧核对并生成三段式提示词..."
-                  : "🔍 原片逐帧核对并生成新版三段式提示词"}
+                {reviewing
+                  ? "正在对照原视频逐帧比对..."
+                  : "🔍 对照原片逐帧比对，给我修改意见"}
               </button>
             </div>
           </div>
 
-          {/* BOX 3: Frame-by-Frame Audit Report + 3-Part Structured Prompt Package */}
+          {/* BOX 2.5 (APPEARS AFTER REVIEW): AI Review Opinions -> User Confirms Which Fixes to Apply! */}
+          {reviewResult && (
+            <div
+              ref={reviewBoxRef}
+              className="rounded-xl bg-amber-950/20 border border-amber-500/45 p-4 space-y-3.5"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-bold text-amber-200 flex items-center gap-1.5">
+                  <ListChecks className="w-4 h-4 text-amber-400" />
+                  ③ 原片逐帧比对意见（请勾选你认可的修改项，确认后再修改并拆分逐镜）
+                </span>
+                {reviewVerdictInfo && (
+                  <span
+                    className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${reviewVerdictInfo.cls}`}
+                  >
+                    {reviewVerdictInfo.label}
+                  </span>
+                )}
+              </div>
+
+              {reviewResult.summary && (
+                <p className="text-xs text-slate-100 leading-relaxed bg-slate-950/70 rounded-lg px-3 py-2 border border-slate-800">
+                  {reviewResult.summary}
+                </p>
+              )}
+
+              {reviewResult.matched_points && reviewResult.matched_points.length > 0 && (
+                <div className="bg-emerald-950/25 border border-emerald-500/25 rounded-lg p-2.5 space-y-1 text-[11px]">
+                  <div className="font-bold text-emerald-300 flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> 与原片一致 / 写得很好的地方
+                  </div>
+                  <ul className="space-y-0.5 text-emerald-100/90 list-disc list-inside">
+                    {reviewResult.matched_points.map((pt, i) => (
+                      <li key={i}>{pt}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Checkable Suggestions List */}
+              {reviewResult.suggestions && reviewResult.suggestions.length > 0 ? (
+                <div className="space-y-2">
+                  <div className="text-[11px] font-bold text-amber-300">
+                    建议修改项（勾选你同意修改的地方，不勾则保持你原词不动）：
+                  </div>
+                  {reviewResult.suggestions.map((sug) => {
+                    const checked = Boolean(selectedFixIds[sug.id]);
+                    return (
+                      <label
+                        key={sug.id}
+                        className={`block rounded-xl p-3 border cursor-pointer transition ${
+                          checked
+                            ? "bg-slate-950/90 border-amber-400/60"
+                            : "bg-slate-950/40 border-slate-800 opacity-70"
+                        }`}
+                      >
+                        <div className="flex items-start gap-2.5">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) =>
+                              setSelectedFixIds((prev) => ({
+                                ...prev,
+                                [sug.id]: e.target.checked,
+                              }))
+                            }
+                            className="mt-0.5 rounded border-slate-600 bg-slate-900 text-amber-400"
+                          />
+                          <div className="space-y-1 min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="px-2 py-0.5 rounded bg-amber-500/20 text-amber-200 font-bold text-[10px]">
+                                {sug.target_area || "关键调整"}
+                              </span>
+                              {sug.priority === "high" && (
+                                <span className="px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 text-[10px] font-semibold">
+                                  重点建议
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-slate-300">
+                              <span className="text-amber-300/90 font-semibold">原片比对发现：</span>
+                              {sug.issue}
+                            </div>
+                            <div className="text-slate-100">
+                              <span className="text-emerald-300 font-semibold">建议修改为：</span>
+                              {sug.suggestion}
+                            </div>
+                          </div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="text-xs text-emerald-300 bg-emerald-950/25 border border-emerald-500/30 rounded-lg px-3 py-2">
+                  ✓ 核对无重大问题，可直接点下方按钮拆分为独立逐镜提示词！
+                </div>
+              )}
+
+              {/* Optional short user note before applying */}
+              <input
+                type="text"
+                value={extraConfirmNote}
+                onChange={(e) => setExtraConfirmNote(e.target.value)}
+                placeholder="（可选）如果你还有想额外补充微调的一句话，写在这里..."
+                className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 focus:border-amber-400 focus:outline-none text-xs text-slate-100 placeholder-slate-500"
+              />
+
+              {applyError && (
+                <div className="rounded-xl bg-rose-500/15 border border-rose-500/40 px-3 py-2 text-xs text-rose-200">
+                  生成失败：{applyError}
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={applying}
+                  onClick={() => handleApplyConfirmedFixes(true)}
+                  className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300 text-xs font-semibold"
+                >
+                  不采纳意见，直接按我原词拆分逐镜
+                </button>
+                <button
+                  type="button"
+                  disabled={applying}
+                  onClick={() => handleApplyConfirmedFixes(false)}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-400 to-orange-400 hover:from-amber-300 hover:to-orange-300 disabled:opacity-50 text-slate-950 font-bold text-xs inline-flex items-center gap-1.5 shadow-lg shadow-amber-500/20"
+                >
+                  {applying ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Wrench className="w-4 h-4" />
+                  )}
+                  {applying
+                    ? "正在按你确认的意见修改并拆分逐镜..."
+                    : "✅ 确认以上意见，修改对应部分并拆分为逐镜提示词"}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* BOX 3: Finalized 4-Part Production Package */}
           <div
             ref={revisedBoxRef}
             className={`rounded-xl p-4 space-y-4 border ${
@@ -670,7 +816,7 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                     : "bg-slate-800 text-slate-400"
                 }`}
               >
-                ③ 逐帧核对结论 & 新版三段式提示词（确认后直接驱动下方生图与可灵 I2V）
+                ④ 已修正并拆分的四段式可执行提示词包（逐镜独立隔离，确认后逐个分镜生成）
               </span>
               {hasCustomized && (
                 <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
@@ -703,72 +849,44 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
             </div>
 
             {!hasCustomized ? (
-              <div className="py-6 text-center text-xs text-slate-400">
-                在上方「② 提交参考提示词与修改内容」点击<b>「🔍 原片逐帧核对并生成新版三段式提示词」</b>，系统将在这里输出：
+              <div className="py-5 text-center text-xs text-slate-400">
+                先在上方「② 贴入替换商品后的提示词」点<b>「🔍 对照原片逐帧比对，给我修改意见」</b>，勾选确认意见后，这里会生成：
                 <br />
-                <b>原片逐帧核对报告</b> + <b>① 全片统一参考提示词</b> + <b>② 可控分镜表（关键帧图 + 图生视频动态词）</b> + <b>③ 统一约束</b>。
+                <b>一、全片统一参考</b> + <b>二、独立逐镜对照表</b> + <b>三、全片统一约束</b> + <b>四、生成与剪辑注意事项及重点</b>。
               </div>
             ) : (
               <>
-                {/* 3.0 Frame-by-Frame Audit Report Card */}
+                {/* Audit Summary Strip */}
                 {auditReport && (
-                  <div className="rounded-xl bg-slate-950/90 border border-sky-500/35 p-3.5 space-y-2.5">
+                  <div className="rounded-xl bg-slate-950/90 border border-sky-500/30 p-3 space-y-1.5">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="font-bold text-sky-200 flex items-center gap-1.5">
-                        <SearchCheck className="w-4 h-4 text-sky-400" />
-                        原视频逐帧比对核对报告
+                      <span className="font-bold text-sky-200 flex items-center gap-1.5 text-[11px]">
+                        <SearchCheck className="w-3.5 h-3.5 text-sky-400" />
+                        本次修改核对摘要
                       </span>
-                      {verdictInfo && (
+                      {auditVerdictInfo && (
                         <span
-                          className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${verdictInfo.cls}`}
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${auditVerdictInfo.cls}`}
                         >
-                          {verdictInfo.label}
+                          {auditVerdictInfo.label}
                         </span>
                       )}
                     </div>
                     {auditReport.summary && (
-                      <p className="text-xs text-slate-200 leading-relaxed">
-                        {auditReport.summary}
-                      </p>
+                      <p className="text-xs text-slate-200 leading-relaxed">{auditReport.summary}</p>
                     )}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5 text-[11px]">
-                      {auditReport.matched_points && auditReport.matched_points.length > 0 && (
-                        <div className="bg-emerald-950/25 border border-emerald-500/25 rounded-lg p-2.5 space-y-1">
-                          <div className="font-bold text-emerald-300 flex items-center gap-1">
-                            <CheckCircle2 className="w-3.5 h-3.5" /> 核对无误点
-                          </div>
-                          <ul className="space-y-1 text-emerald-100/90 list-disc list-inside">
-                            {auditReport.matched_points.map((pt, i) => (
-                              <li key={i}>{pt}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                      {auditReport.issues_found && auditReport.issues_found.length > 0 && (
-                        <div className="bg-amber-950/25 border border-amber-500/25 rounded-lg p-2.5 space-y-1">
-                          <div className="font-bold text-amber-300 flex items-center gap-1">
-                            <AlertTriangle className="w-3.5 h-3.5" /> 发现的原片遗漏/偏差
-                          </div>
-                          <ul className="space-y-1 text-amber-100/90 list-disc list-inside">
-                            {auditReport.issues_found.map((pt, i) => (
-                              <li key={i}>{pt}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                      {auditReport.fixes_applied && auditReport.fixes_applied.length > 0 && (
-                        <div className="bg-sky-950/25 border border-sky-500/25 rounded-lg p-2.5 space-y-1">
-                          <div className="font-bold text-sky-300 flex items-center gap-1">
-                            <Wrench className="w-3.5 h-3.5" /> 已自动修正落实
-                          </div>
-                          <ul className="space-y-1 text-sky-100/90 list-disc list-inside">
-                            {auditReport.fixes_applied.map((pt, i) => (
-                              <li key={i}>{pt}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                    </div>
+                    {auditReport.fixes_applied && auditReport.fixes_applied.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 pt-0.5">
+                        {auditReport.fixes_applied.map((fix, i) => (
+                          <span
+                            key={i}
+                            className="px-2 py-0.5 rounded-md bg-sky-500/15 border border-sky-500/30 text-sky-200 text-[10px]"
+                          >
+                            🔧 {fix}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -777,10 +895,10 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <span className="font-bold text-emerald-300">
-                        第一部分：全片统一参考提示词
+                        一、全片统一参考提示词
                       </span>
                       <span className="text-[11px] text-slate-400 ml-2">
-                        用于锁定产品外观、统一人物、核心场景与摄影质感
+                        锁定产品外观、统一人物、核心场景与摄影质感
                       </span>
                     </div>
                     <button
@@ -798,7 +916,7 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                   </div>
                   {manualEditing ? (
                     <textarea
-                      rows={6}
+                      rows={5}
                       value={manualGlobalRefCn}
                       onChange={(e) => setManualGlobalRefCn(e.target.value)}
                       className="w-full p-3 rounded-xl bg-slate-900 border border-amber-500/40 text-xs text-slate-100 leading-relaxed focus:outline-none"
@@ -810,16 +928,13 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                   )}
                 </div>
 
-                {/* PART 2: Controllable Shot Table (Keyframe Image Prompt | I2V Motion Prompt) */}
+                {/* PART 2: Shot-by-Shot Controllable Table */}
                 {storyboard.length > 0 && (
                   <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-3.5 space-y-2.5">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <span className="font-bold text-sky-300">
-                          第二部分：拆分为 {storyboard.length} 个可控制的镜头
-                        </span>
-                        <span className="text-[11px] text-slate-400 ml-2">
-                          每一行先按「关键帧图片内容」生图确认，再用右侧「图生视频动态提示词」交给可灵 I2V
+                          二、已拆分为 {storyboard.length} 个独立可控镜头（逐镜单独生成，每次只跑当前镜头）
                         </span>
                       </div>
                     </div>
@@ -832,10 +947,10 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                               镜头 / 建议时长
                             </th>
                             <th className="py-2 px-3 font-semibold min-w-[220px]">
-                              关键帧图片内容（用于步骤 2 先出图确认）
+                              关键帧图片内容（逐镜先出图确认）
                             </th>
                             <th className="py-2 pl-3 font-semibold min-w-[260px]">
-                              可复制的图生视频提示词（用于可灵 I2V）
+                              独立图生视频提示词（仅当前镜头动作）
                             </th>
                           </tr>
                         </thead>
@@ -895,7 +1010,7 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                                   <button
                                     type="button"
                                     onClick={() =>
-                                      handleCopy(motionDesc, `镜头 ${shot.shot_no} 图生视频提示词`)
+                                      handleCopy(motionDesc, `镜头 ${shot.shot_no} 图生视频词`)
                                     }
                                     className="mt-1.5 text-[10px] text-emerald-400 hover:text-emerald-300 inline-flex items-center gap-1"
                                   >
@@ -916,7 +1031,7 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs font-bold text-rose-300 flex items-center gap-1.5">
                       <ShieldAlert className="w-3.5 h-3.5" />
-                      第三部分：每段附加同一组统一约束（防换款、防变形、防穿帮）
+                      三、每段附加同一组统一约束
                     </span>
                     <button
                       type="button"
@@ -945,13 +1060,88 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                   )}
                 </div>
 
+                {/* PART 4: Generation & Editing Guidelines + Final QA Checklist */}
+                {editingGuidelines && (
+                  <div className="bg-indigo-950/25 border border-indigo-500/35 rounded-xl p-3.5 space-y-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-indigo-200 flex items-center gap-1.5">
+                        <Scissors className="w-3.5 h-3.5 text-indigo-400" />
+                        四、生成顺序与剪辑注意事项及重点
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const txt = [
+                            "【生成顺序】",
+                            ...(editingGuidelines.generation_order || []).map((x, i) => `${i + 1}. ${x}`),
+                            "\n【转场与衔接重点】",
+                            ...(editingGuidelines.transition_tips || []).map((x) => `- ${x}`),
+                            "\n【音效与 Logo 叠加】",
+                            ...(editingGuidelines.audio_and_overlay_tips || []).map((x) => `- ${x}`),
+                            "\n【最终成片验收四项红线】",
+                            ...(editingGuidelines.final_qa_checklist || []).map((x) => `✓ ${x}`),
+                          ].join("\n");
+                          handleCopy(txt, "生成与剪辑重点");
+                        }}
+                        className="text-[11px] text-indigo-300 hover:text-indigo-200 inline-flex items-center gap-1"
+                      >
+                        <Copy className="w-3 h-3" /> 复制剪辑指南
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5 text-[11px]">
+                      {editingGuidelines.generation_order?.length > 0 && (
+                        <div className="bg-slate-950/75 border border-slate-800 rounded-lg p-2.5 space-y-1">
+                          <div className="font-bold text-sky-300">1. 推荐逐镜生成顺序</div>
+                          <ol className="list-decimal list-inside space-y-1 text-slate-200 leading-relaxed">
+                            {editingGuidelines.generation_order.map((item, i) => (
+                              <li key={i}>{item}</li>
+                            ))}
+                          </ol>
+                        </div>
+                      )}
+                      {editingGuidelines.transition_tips?.length > 0 && (
+                        <div className="bg-slate-950/75 border border-slate-800 rounded-lg p-2.5 space-y-1">
+                          <div className="font-bold text-amber-300">2. 剪辑转场与衔接重点</div>
+                          <ul className="list-disc list-inside space-y-1 text-slate-200 leading-relaxed">
+                            {editingGuidelines.transition_tips.map((item, i) => (
+                              <li key={i}>{item}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {editingGuidelines.audio_and_overlay_tips?.length > 0 && (
+                        <div className="bg-slate-950/75 border border-slate-800 rounded-lg p-2.5 space-y-1">
+                          <div className="font-bold text-purple-300">3. 声音与 Logo/文案叠加</div>
+                          <ul className="list-disc list-inside space-y-1 text-slate-200 leading-relaxed">
+                            {editingGuidelines.audio_and_overlay_tips.map((item, i) => (
+                              <li key={i}>{item}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {editingGuidelines.final_qa_checklist?.length > 0 && (
+                        <div className="bg-emerald-950/25 border border-emerald-500/25 rounded-lg p-2.5 space-y-1">
+                          <div className="font-bold text-emerald-300">4. 最终成片验收红线</div>
+                          <ul className="space-y-1 text-emerald-100/90 leading-relaxed">
+                            {editingGuidelines.final_qa_checklist.map((item, i) => (
+                              <li key={i} className="flex items-start gap-1.5">
+                                <AlertTriangle className="w-3 h-3 text-emerald-400 shrink-0 mt-0.5" />
+                                <span>{item}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {/* Optional Combined Master Prompt & English View */}
                 {showCombinedMaster && revisedPromptCn && (
                   <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 space-y-1.5">
                     <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold text-slate-300">
-                        完整汇总总稿（一键整段复制）
-                      </span>
+                      <span className="text-[11px] font-bold text-slate-300">完整汇总总稿</span>
                       <button
                         type="button"
                         onClick={() => handleCopy(revisedPromptCn, "完整汇总总稿")}
@@ -972,30 +1162,10 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                   </div>
                 )}
 
-                {/* Recent AI reply + learned memory badges */}
-                {history.length > 0 && history[history.length - 1].role === "director" && (
-                  <div className="bg-slate-950/70 border border-slate-800 rounded-xl px-3 py-2 text-[11px] text-slate-300 space-y-1">
-                    <div>🤖 {history[history.length - 1].message}</div>
-                    {history[history.length - 1].learned_memories &&
-                      history[history.length - 1].learned_memories!.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 pt-0.5">
-                          {history[history.length - 1].learned_memories!.map((rule, rIdx) => (
-                            <span
-                              key={rIdx}
-                              className="px-2 py-0.5 rounded-md bg-purple-500/20 border border-purple-400/40 text-purple-200 text-[10px]"
-                            >
-                              🧠 已记住：{rule}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                  </div>
-                )}
-
-                {/* Primary Confirm & Start Video Production Button */}
+                {/* Primary Confirm & Enter Shot-by-Shot Production */}
                 <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
                   <span className="text-[11px] text-slate-400">
-                    核对三段式提示词无误后，点右侧按钮直接进入下方「关键帧生图确认（支持单图中文修正）→ 可灵生视频 → 成片合成」！
+                    确认无误后点右侧按钮展开下方工作台，按<b>逐个分镜单独出图确认 → 逐个分镜生成可灵视频</b>执行！
                   </span>
                   {!isLocked ? (
                     <button
@@ -1009,12 +1179,12 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                       ) : (
                         <Sparkles className="w-4 h-4" />
                       )}
-                      ✅ 确认没问题，进入生图确认与视频制作
+                      ✅ 确认定稿，进入逐镜生成工作台
                     </button>
                   ) : (
                     <span className="text-emerald-300 font-bold text-xs inline-flex items-center gap-1">
                       <Lock className="w-3.5 h-3.5" />
-                      已确认定稿，请在下方执行生图确认与视频制作
+                      已确认定稿，请在下方按逐个分镜依次生图与生成视频
                     </span>
                   )}
                 </div>

@@ -81,7 +81,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
   const [stitchBusy, setStitchBusy] = useState(false);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [forceShowGenerator, setForceShowGenerator] = useState(false);
-  const [showSegmentDetails, setShowSegmentDetails] = useState(false);
+  const [showSegmentDetails, setShowSegmentDetails] = useState(true);
   const [imageFixInputs, setImageFixInputs] = useState<Record<number, string>>({});
 
   const refInputRef = useRef<HTMLInputElement | null>(null);
@@ -553,7 +553,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
             )}
             <div className="min-w-0">
               <div className="text-sm font-bold text-white flex items-center gap-2 flex-wrap">
-                <span>步骤 2：按确认好的提示词一键生成视频</span>
+                <span>步骤 2：逐个分镜单独出图确认 → 逐镜生成可灵视频 → 合成成片</span>
                 <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[11px] font-medium">
                   已绑定商品图：{studio.product_name}
                 </span>
@@ -862,31 +862,10 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
               )}
             </div>
           )}
-          <div className="flex flex-wrap items-center gap-2.5">
-          <button
-            type="button"
-            disabled={batchImgBusy}
-            onClick={handleGenerateAllImages}
-            className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-400 hover:from-emerald-400 hover:to-teal-300 disabled:opacity-60 text-slate-950 font-bold text-xs inline-flex items-center gap-1.5 shadow-lg shadow-emerald-500/15"
-          >
-            {batchImgBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
-            1. 一键生成画面首帧图
-          </button>
-
-          <button
-            type="button"
-            disabled={batchVidBusy}
-            onClick={handleGenerateAllVideos}
-            className={`px-4 py-2.5 rounded-xl font-bold text-xs inline-flex items-center gap-1.5 border transition ${
-              studio.kling_configured
-                ? "bg-sky-500 hover:bg-sky-400 border-sky-400 text-slate-950"
-                : "bg-slate-900 hover:bg-slate-800 border-slate-700 text-slate-300"
-            }`}
-          >
-            {batchVidBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Clapperboard className="w-4 h-4" />}
-            2. 一键可灵生成动态视频{studio.kling_configured ? "" : "（可选·需配 Kling Key）"}
-          </button>
-
+          <div className="rounded-xl bg-sky-950/35 border border-sky-500/35 px-3 py-2 text-[11px] text-sky-100 leading-relaxed">
+            🎯 <b>逐镜单步生成（推荐）：</b>下方已自动拆分为 <b>{storyboard.length} 个独立分镜卡片</b>。请按顺序<b>逐个分镜单独点击「生成首帧图」→ 满意后再单独点「用该图生成可灵视频」</b>（不满意可直接在图下写中文重绘），全部满意后再点右侧合成 9:16 成片！
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             disabled={stitchBusy || !studio.ffmpeg_available}
@@ -894,7 +873,29 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
             className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-400 hover:to-pink-400 disabled:opacity-50 text-white font-bold text-xs inline-flex items-center gap-1.5 shadow-lg shadow-purple-500/20"
           >
             {stitchBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Film className="w-4 h-4" />}
-            3. 一键合成 9:16 成片 MP4（已就绪 {readyShotCount}/{storyboard.length}）
+            🎬 合成 9:16 成片 MP4（已就绪 {readyShotCount}/{storyboard.length} 镜）
+          </button>
+
+          <button
+            type="button"
+            disabled={batchImgBusy}
+            onClick={handleGenerateAllImages}
+            className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 disabled:opacity-60 text-slate-300 font-medium text-[11px] inline-flex items-center gap-1"
+            title="如需一次性补齐剩余未生成的分镜首帧图可使用此备用按钮"
+          >
+            {batchImgBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5 text-emerald-400" />}
+            备用：批量补齐未生图
+          </button>
+
+          <button
+            type="button"
+            disabled={batchVidBusy}
+            onClick={handleGenerateAllVideos}
+            className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 disabled:opacity-60 text-slate-300 font-medium text-[11px] inline-flex items-center gap-1"
+            title="如需一次性补齐剩余未生成的可灵视频可使用此备用按钮"
+          >
+            {batchVidBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Clapperboard className="w-3.5 h-3.5 text-sky-400" />}
+            备用：批量补齐可灵视频
           </button>
 
           {hasProcessing && (
@@ -1159,7 +1160,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
           className="w-full px-4 py-2.5 rounded-xl bg-slate-950 hover:bg-slate-900 border border-slate-800 flex items-center justify-between text-xs text-slate-300"
         >
           <span>
-            生成的画面与视频片段明细（已就绪 {readyShotCount}/{storyboard.length}，默认自动处理，需要单张重绘时可展开）
+            🎬 逐镜独立生成面板（共 {storyboard.length} 个独立分镜 · 已就绪 {readyShotCount}/{storyboard.length} · 逐个出图确认再逐个生成视频）
           </span>
           <span className="text-sky-400 font-semibold">
             {showSegmentDetails || studio.assets.length > 0 ? (showSegmentDetails ? "收起明细 ▲" : "展开查看 / 单张重绘 ▼") : "展开明细 ▼"}

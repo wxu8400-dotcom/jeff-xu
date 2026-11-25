@@ -91,6 +91,29 @@ export interface DirectorMemoryItem {
   updated_at: string;
 }
 
+export interface EditingGuidelines {
+  generation_order: string[];
+  transition_tips: string[];
+  audio_and_overlay_tips: string[];
+  final_qa_checklist: string[];
+}
+
+export interface PromptReviewSuggestion {
+  id: string;
+  target_area: string;
+  issue: string;
+  suggestion: string;
+  priority: "high" | "medium" | string;
+}
+
+export interface PromptReviewResponse {
+  verdict: "accurate" | "minor_gaps" | "major_mismatch" | string;
+  summary: string;
+  matched_points: string[];
+  suggestions: PromptReviewSuggestion[];
+  editing_guidelines?: EditingGuidelines | null;
+}
+
 export interface PromptAuditReport {
   verdict: "accurate" | "minor_gaps" | "major_mismatch" | "verified" | string;
   summary: string;
@@ -109,6 +132,7 @@ export interface DirectorPlan {
   current_master_prompt_en?: string;
   negative_constraints?: string;
   prompt_audit_report?: PromptAuditReport | null;
+  editing_guidelines?: EditingGuidelines | null;
   has_user_customized?: boolean;
   keyframe_previews?: string[];
   keyframe_timestamps?: number[];

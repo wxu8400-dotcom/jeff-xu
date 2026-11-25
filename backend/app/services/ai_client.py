@@ -16,12 +16,15 @@ from ..schemas import (
     CopywritingAnalysis,
     DirectorPlan,
     DirectorRevisionResponse,
+    EditingGuidelines,
     KlingVideoPrompt,
     LearnedMemoryItem,
     PreliminaryScreeningBatch,
     PreliminaryScreeningItem,
     ProductDNA,
     PromptAuditReport,
+    PromptReviewResponse,
+    PromptReviewSuggestion,
     RefinedImagePromptResponse,
     ReplaceabilityAnalysis,
     SearchQueries,
@@ -884,6 +887,55 @@ class UnifiedAIClient:
             )
             return analysis, TokenUsage(input_tokens=11800, output_tokens=2100)  # type: ignore[return-value]
 
+        if schema_cls is PromptReviewResponse:
+            return (
+                PromptReviewResponse(
+                    verdict="minor_gaps",
+                    summary="已将你提交的「替换商品后提示词」与原视频逐帧画面及原片提示词完成比对：核心结构清晰，建议补齐中段转场遮挡衔接并强化单镜动作拆分。",
+                    matched_points=[
+                        "开场主体与场景空间关系与原片 0.15s 首帧一致",
+                        "结尾完整展示目标商品的落点与原片节奏吻合",
+                    ],
+                    suggestions=[
+                        PromptReviewSuggestion(
+                            id="fix_1",
+                            target_area="中段转场镜头",
+                            issue="原片存在物体扑向镜头的前景遮挡转场帧，当前提示词未明确该遮挡衔接",
+                            suggestion="在对应镜头结尾补入“主体快速飞近形成前景遮挡”以平滑切入下一镜",
+                            priority="high",
+                        ),
+                        PromptReviewSuggestion(
+                            id="fix_2",
+                            target_area="单镜动作隔离",
+                            issue="为避免可灵图生视频跑偏，每镜应只写当前镜头的独立动作",
+                            suggestion="按 3~6 个独立可控镜头拆分，每镜只输入当前镜头关键帧与动态指令",
+                            priority="medium",
+                        ),
+                    ],
+                    editing_guidelines=EditingGuidelines(
+                        generation_order=[
+                            "先制作首尾关键镜的关键帧，确认产品外观与人物形象 100% 一致后再继续其余镜头。",
+                            "逐镜头生成短视频，每次只输入当前镜头动作，不要把整套剧情重复粘贴进去。",
+                        ],
+                        transition_tips=[
+                            "前一镜尾帧若准确，可直接作为下一镜首帧保持摆放位置一致。",
+                            "剪辑时利用烟雾或前景主体遮挡衔接相邻转场镜头。",
+                        ],
+                        audio_and_overlay_tips=[
+                            "后期按画面节奏补入环境风声、高潮冲击声、落地声与自然笑声。",
+                            "Logo、产品名和联系方式在剪辑阶段叠加在最后稳定展示产品的画面上。",
+                        ],
+                        final_qa_checklist=[
+                            "产品没有变款、颜色纹理一致",
+                            "人物没有换脸、发型服装统一",
+                            "主体运动方向连续无跳帧",
+                            "结尾完整清晰展示产品",
+                        ],
+                    ),
+                ),
+                TokenUsage(input_tokens=1500, output_tokens=700),
+            )  # type: ignore[return-value]
+
         if schema_cls is DirectorRevisionResponse:
             current_raw = ctx.get("current_analysis") or {}
             feedback = str(ctx.get("user_feedback") or "").strip()
@@ -944,8 +996,28 @@ class UnifiedAIClient:
                             "中段转场衔接描述略简略，已按原片逐帧节奏补齐过渡细节",
                         ],
                         fixes_applied=[
-                            f"已严格落实用户修改要求：{feedback[:60]}",
-                            "已同步拆分为三段式可控提示词（全片参考 + 关键帧/动态对照表 + 统一约束）",
+                            f"已严格落实用户确认的修改要求：{feedback[:60]}",
+                            "已同步拆分为独立逐镜可控提示词与生成/剪辑重点",
+                        ],
+                    ),
+                    editing_guidelines=EditingGuidelines(
+                        generation_order=[
+                            "先制作镜头①与结尾镜的关键帧，确认产品外观与人物形象一致后再继续生成其余镜头。",
+                            "逐镜头生成短视频，每次只输入当前镜头动作，不要把整套剧情重复粘贴进去。",
+                        ],
+                        transition_tips=[
+                            "前一镜尾帧若准确，可直接作为下一镜首帧保持空间位置一致。",
+                            "剪辑时用烟雾或前景主体遮挡自然连接相邻转场镜头。",
+                        ],
+                        audio_and_overlay_tips=[
+                            "后期按画面节奏添加环境风声、转场音效、落地声与人物情绪声。",
+                            "Logo、产品名和联系方式在剪辑阶段叠加在最后稳定展示产品的画面上。",
+                        ],
+                        final_qa_checklist=[
+                            "产品没有变款、颜色与纹理一致",
+                            "人物没有换脸、发型服装统一",
+                            "主体运动方向与空间关系连续",
+                            "结尾完整清晰展示产品",
                         ],
                     ),
                     global_reference_prompt_cn=(

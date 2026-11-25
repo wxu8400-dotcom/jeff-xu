@@ -136,6 +136,29 @@ export const api = {
       method: "DELETE",
     }),
 
+  reviewProductReplacedPrompt: (
+    videoId: string,
+    payload: {
+      productReplacedPromptText?: string;
+      promptImages?: File[];
+    }
+  ) => {
+    const fd = new FormData();
+    if (payload.productReplacedPromptText) {
+      fd.append("product_replaced_prompt_text", payload.productReplacedPromptText);
+    }
+    for (const file of payload.promptImages || []) {
+      fd.append("prompt_images", file);
+    }
+    return apiFetch<{
+      ok: boolean;
+      review: import("../types/radar").PromptReviewResponse;
+    }>(`/api/studio/videos/${encodeURIComponent(videoId)}/review-prompt`, {
+      method: "POST",
+      body: fd,
+    });
+  },
+
   auditRevisePrompt: (
     videoId: string,
     payload: {
