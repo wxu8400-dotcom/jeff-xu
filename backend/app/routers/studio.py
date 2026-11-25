@@ -71,6 +71,7 @@ from ..services.media_generator import (
     generate_kling_video_clip,
     generate_product_image,
 )
+from ..services.pack_parser import is_placeholder_text, parse_structured_production_pack
 from ..services.product_parser import _resize_jpeg
 from ..services.prompts import (
     build_director_revision_prompt,
@@ -292,12 +293,15 @@ def _build_image_slot_blueprints(
     # Slot 0: Hero Poster
     if include_poster and img_prompts:
         p0 = img_prompts[0]
+        p0_en = str(p0.get("prompt_en") or "")
+        p0_cn = str(p0.get("prompt_cn") or "")
+        p0_final = p0_cn if is_placeholder_text(p0_en) and p0_cn else (p0_en or p0_cn)
         slots.append(
             {
                 "slot_index": 0,
                 "shot_no": None,
                 "scene_title": str(p0.get("scene_title") or "爆款主视觉海报（封面图）"),
-                "prompt": str(p0.get("prompt_en") or p0.get("prompt_cn") or ""),
+                "prompt": p0_final,
                 "aspect_ratio": str(p0.get("aspect_ratio") or "9:16"),
                 "production_mode": "ai",
             }
@@ -310,22 +314,31 @@ def _build_image_slot_blueprints(
         if not include_real_shoot_shots and mode == "real_shoot":
             continue
 
-        # Match prompt from chatgpt_images_prompts[idx] if available, else synthesize high-fidelity prompt
+        # Match prompt from chatgpt_images_prompts[idx] if available, rejecting any placeholder text
         matched_prompt = img_prompts[idx] if idx < len(img_prompts) else None
-        if matched_prompt and (matched_prompt.get("prompt_en") or matched_prompt.get("prompt_cn")):
-            prompt_text = str(matched_prompt.get("prompt_en") or matched_prompt.get("prompt_cn"))
+        raw_en = str((matched_prompt or {}).get("prompt_en") or "")
+        raw_cn = str((matched_prompt or {}).get("prompt_cn") or "")
+        if matched_prompt and (not is_placeholder_text(raw_en) or not is_placeholder_text(raw_cn)):
+            prompt_text = raw_cn if is_placeholder_text(raw_en) and raw_cn else (raw_en or raw_cn)
             scene_title = str(matched_prompt.get("scene_title") or f"分镜 {shot_no} 首帧图")
             aspect = str(matched_prompt.get("aspect_ratio") or "9:16")
         else:
             visual = str(shot.get("adapted_visual_for_product") or shot.get("original_visual") or "")
-            shot_size = str(shot.get("shot_size") or "商业特写")
-            prompt_text = (
-                f"Keep the exact product from the uploaded reference image ({pname}, {pform}, "
-                f"preserving its exact shape, color, material, and details 100% unchanged). "
-                f"Commercial storyboard keyframe for Shot {shot_no} ({shot_size}): {visual}. "
-                f"Photorealistic commercial advertising lighting, crisp focus, high-end cinema look, "
-                f"vertical 9:16 composition, no watermark, no random text."
-            )
+            shot_size = str(shot.get("shot_size") or "商业镜头")
+            action = str(shot.get("replication_action") or "insert_product").lower()
+            if action == "keep_scene":
+                prompt_text = (
+                    f"Photorealistic vertical 9:16 cinematic frame for Shot {shot_no} ({shot_size}): {visual}. "
+                    f"Natural cinema lighting, crisp focus, no watermark, no random text."
+                )
+            else:
+                prompt_text = (
+                    f"Keep the exact product from the uploaded reference image ({pname}, {pform}, "
+                    f"preserving its exact shape, color, material, and details 100% unchanged). "
+                    f"Commercial storyboard keyframe for Shot {shot_no} ({shot_size}): {visual}. "
+                    f"Photorealistic commercial advertising lighting, crisp focus, high-end cinema look, "
+                    f"vertical 9:16 composition, no watermark, no random text."
+                )
             scene_title = f"分镜 {shot_no} 首帧图（{shot_size}）"
             aspect = "9:16"
 
@@ -1160,22 +1173,86 @@ async def audit_and_revise_prompt(
         else ref_text[:120]
     )
 
-    try:
-        rev_res, _usage = await ai.generate_structured(
-            prompt=audit_prompt,
-            schema_cls=DirectorRevisionResponse,
-            tier="deep",
-            images=combined_images,
-            mock_context={
-                "current_analysis": curr_analysis,
-                "user_feedback": user_summary,
-            },
+    # Deterministic structured pack parser: if the user uploaded structured multi-shot files
+    # (e.g. 【镜头01｜...】..【镜头07｜...】), parse ALL N shots 100% faithfully in Python so an LLM
+    # can NEVER drop shots or emit placeholder strings!
+    parsed_pack = parse_structured_production_pack(ref_text, product_name=dna.product_name)
+    is_direct_decompose = (
+        parsed_pack is not None
+        and (
+            not mod_notes
+            or "100% 深度理解并保留" in mod_notes
+            or "无需改动剧情" in mod_notes
         )
-    except Exception as exc:
-        logger.exception("Prompt audit & revision failed for video %s: %s", video_id, exc)
-        raise HTTPException(
-            status_code=502, detail=f"逐帧核对并生成新版提示词失败：{exc}"
-        ) from exc
+    )
+
+    def _pack_to_revision_response(pack: dict[str, Any]) -> DirectorRevisionResponse:
+        return DirectorRevisionResponse(
+            director_reply=(
+                f"已 100% 精准拆解你的结构化双文件：完整保留全部 {pack['shot_count']} 个独立镜头"
+                f"（零删减、零占位词、无成品镜头已自动防串镜），请确认后直接进入步骤 2 生成关键图片！"
+            ),
+            changed_shots=[s.shot_no for s in pack["storyboard"]],
+            prompt_audit_report=pack["audit_report"],
+            editing_guidelines=pack["editing_guidelines"],
+            global_reference_prompt_cn=pack["global_reference_prompt_cn"],
+            global_reference_prompt_en=pack["global_reference_prompt_cn"],
+            current_master_prompt_cn=pack["master_summary"],
+            current_master_prompt_en=pack["master_summary"],
+            negative_constraints=pack["negative_constraints"],
+            ai_character_profile_cn=pack["ai_character_profile_cn"],
+            ai_character_profile_en=pack["ai_character_profile_cn"],
+            storyboard=pack["storyboard"],
+            chatgpt_images_prompts=pack["chatgpt_images_prompts"],
+            kling_prompts=pack["kling_prompts"],
+            learned_memories=[],
+            analysis=None,
+        )
+
+    if is_direct_decompose and parsed_pack is not None:
+        rev_res = _pack_to_revision_response(parsed_pack)
+    else:
+        try:
+            rev_res, _usage = await ai.generate_structured(
+                prompt=audit_prompt,
+                schema_cls=DirectorRevisionResponse,
+                tier="deep",
+                images=combined_images,
+                mock_context={
+                    "current_analysis": curr_analysis,
+                    "user_feedback": user_summary,
+                },
+            )
+        except Exception as exc:
+            if parsed_pack is not None:
+                logger.warning("LLM audit failed, falling back to deterministic pack parser: %s", exc)
+                rev_res = _pack_to_revision_response(parsed_pack)
+            else:
+                logger.exception("Prompt audit & revision failed for video %s: %s", video_id, exc)
+                raise HTTPException(
+                    status_code=502, detail=f"深度拆解并生成新版提示词失败：{exc}"
+                ) from exc
+
+        # Hard P0 quality guard: if LLM dropped shots or emitted ANY placeholder string,
+        # immediately substitute the deterministic structured parse!
+        if parsed_pack is not None:
+            llm_shots = rev_res.storyboard or []
+            llm_imgs = rev_res.chatgpt_images_prompts or []
+            has_placeholder = any(
+                is_placeholder_text(s.adapted_visual_for_product) for s in llm_shots
+            ) or any(
+                is_placeholder_text(p.prompt_en) and is_placeholder_text(p.prompt_cn)
+                for p in llm_imgs
+            )
+            if len(llm_shots) < parsed_pack["shot_count"] or has_placeholder:
+                logger.warning(
+                    "LLM output failed P0 guard (shots=%d vs expected=%d, placeholder=%s); "
+                    "using deterministic pack parser!",
+                    len(llm_shots),
+                    parsed_pack["shot_count"],
+                    has_placeholder,
+                )
+                rev_res = _pack_to_revision_response(parsed_pack)
 
     saved_memories = save_learned_memories(
         db,

@@ -747,45 +747,45 @@ def build_prompt_audit_and_revision_prompt(
   "storyboard": [
     {{
       "shot_no": 1,
-      "time_range": "约3秒",
-      "shot_size": "广角中近景",
-      "camera_movement": "跟随俯拍",
-      "original_visual": "对应原片该段真实帧画面",
-      "adapted_visual_for_product": "展示并抛出：人物在主场景展示迷你版产品并抛出",
-      "audio_sfx": "环境风声与动作音效",
+      "time_range": "<该镜建议保留时长，如约2.5秒>",
+      "shot_size": "<景别>",
+      "camera_movement": "<运镜>",
+      "original_visual": "<该镜对应的关键帧中文画面>",
+      "adapted_visual_for_product": "<镜头标题 + 完整关键帧画面描述，严禁照抄任何占位示例>",
+      "audio_sfx": "<该镜音效>",
       "production_mode": "ai",
       "real_shoot_guide": "",
       "spoken_line": "",
-      "replication_action": "insert_product",
-      "director_advice": "",
+      "replication_action": "keep_scene 或 insert_product（不含成品必须写 keep_scene）",
+      "director_advice": "<衔接与验收要点>",
       "has_person": true
     }}
   ],
   "chatgpt_images_prompts": [
     {{
-      "scene_title": "主视觉封面图",
-      "usage_note": "自动融合上传的多角度商品图",
+      "scene_title": "主视觉参考图",
+      "usage_note": "自动融合多角度商品图",
       "aspect_ratio": "9:16",
-      "prompt_en": "Keep the exact product from the uploaded reference images...",
-      "prompt_cn": "严格保持上传商品外观一致的主视觉封面..."
+      "prompt_en": "<完整具体的场景+人物+产品英文生图提示词，至少60词，严禁使用省略号或占位句>",
+      "prompt_cn": "<对应的完整中文关键帧画面描述>"
     }},
     {{
-      "scene_title": "① 展示并抛出 / 约3秒",
-      "usage_note": "先生成关键帧图确认正确，再用图生视频动态提示词生成视频",
+      "scene_title": "<镜头01标题与建议时长>",
+      "usage_note": "对应镜头01关键帧",
       "aspect_ratio": "9:16",
-      "prompt_en": "Photorealistic vertical 9:16 cinema keyframe...",
-      "prompt_cn": "关键帧图片内容：简洁清晰描述该镜头首帧的构图、人物位置与产品状态"
+      "prompt_en": "<完整具体的镜头01场景+人物/主体+光线构图英文生图提示词，至少60词，严禁省略号>",
+      "prompt_cn": "<对应的镜头01完整中文关键帧描述>"
     }}
   ],
   "kling_prompts": [
     {{
       "shot_no": 1,
-      "scene_title": "① 展示并抛出 / 约3秒",
+      "scene_title": "<镜头01标题与建议时长>",
       "mode": "图生视频 (I2V)",
       "recommended_params": "时长: 5s | 画质: 高品质",
-      "prompt_cn": "保持人物与产品外观不变。清晰描述该镜头从首帧开始的连续动作、物理轨迹、镜头跟随与结尾状态",
-      "prompt_en": "Keep the exact character and product unchanged from the first frame. Smooth cinematic motion...",
-      "negative_prompt": "避免产品换款、颜色漂移、纹理消失、人物换脸、手指畸形、穿模、画面文字或水印"
+      "prompt_cn": "<仅限镜头01的完整中文动态动作与运镜提示词>",
+      "prompt_en": "<Complete English Kling I2V motion prompt ONLY for shot 1>",
+      "negative_prompt": "<第三部分的完整负向排除约束>"
     }}
   ]
 }}"""

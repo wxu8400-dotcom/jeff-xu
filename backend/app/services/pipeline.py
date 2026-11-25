@@ -25,6 +25,7 @@ from .collectors.tikhub import TikHubCollector
 from .collectors.youtube_api import YouTubeOfficialCollector
 from .director_memory import load_director_memory_block
 from .filter_engine import run_hard_filter
+from .pack_parser import is_placeholder_text, parse_structured_production_pack
 from .product_parser import ParsedProductBundle, _resize_jpeg
 from .prompts import (
     build_deep_analysis_prompt,
@@ -766,44 +767,61 @@ async def run_prompt_import_pipeline(
             funnel_stats=stats,
         )
 
-        # Put prompt screenshots FIRST (high priority OCR), then up to 4 multi-angle product photos
-        all_images: list[tuple[bytes, str]] = [
-            *prompt_screenshots[:8],
-            *product_bundle.ai_images[:4],
-        ]
-
-        import_prompt = build_prompt_import_prompt(
-            product_name=pname,
-            product_text=product_bundle.combined_text,
-            pasted_prompt_text=pasted_prompt_text,
-            screenshot_count=min(len(prompt_screenshots), 8),
-            product_photo_count=min(len(product_bundle.ai_images), 4),
+        # Fast-path deterministic parser for structured multi-shot production packs
+        # (guarantees 100% exact shot count, zero dropped shots, zero placeholder hallucination!)
+        parsed_pack = parse_structured_production_pack(
+            pasted_prompt_text, product_name=pname
         )
-
-        deep_res, usage = await ai.generate_structured(
-            prompt=import_prompt,
-            schema_cls=VideoDeepAnalysis,
-            tier="deep",
-            images=all_images,
-            mock_context={
-                "product_dna": ProductDNA(
-                    product_name=pname,
-                    physical_form=product_bundle.combined_text[:180] or pname,
+        if parsed_pack is not None:
+            deep_res = parsed_pack["deep_analysis"]
+            _update_session(
+                session_id,
+                status="analyzing",
+                progress_percent=75,
+                progress_message=(
+                    f"已 100% 精准解析出全部 {parsed_pack['shot_count']} 个独立镜头（零删减、自动防串镜），正在生成制作工作台..."
                 ),
-                "video_meta": {
-                    "title": f"导入提示词直出 · {pname}",
-                    "original_featured_item": pname,
-                },
-            },
-        )
-        total_usage.add(usage)
-        stats["input_tokens"] = total_usage.input_tokens
-        stats["output_tokens"] = total_usage.output_tokens
-        stats["estimated_cost_cny"] = estimate_cost_cny(
-            total_usage.input_tokens, total_usage.output_tokens, "gpt-4.1"
-        )
+                funnel_stats=stats,
+            )
+        else:
+            # Put prompt screenshots FIRST (high priority OCR), then up to 4 multi-angle product photos
+            all_images: list[tuple[bytes, str]] = [
+                *prompt_screenshots[:8],
+                *product_bundle.ai_images[:4],
+            ]
 
-        # Guarantee clean fields and locked status so Step 2 generation panel opens immediately!
+            import_prompt = build_prompt_import_prompt(
+                product_name=pname,
+                product_text=product_bundle.combined_text,
+                pasted_prompt_text=pasted_prompt_text,
+                screenshot_count=min(len(prompt_screenshots), 8),
+                product_photo_count=min(len(product_bundle.ai_images), 4),
+            )
+
+            deep_res, usage = await ai.generate_structured(
+                prompt=import_prompt,
+                schema_cls=VideoDeepAnalysis,
+                tier="deep",
+                images=all_images,
+                mock_context={
+                    "product_dna": ProductDNA(
+                        product_name=pname,
+                        physical_form=product_bundle.combined_text[:180] or pname,
+                    ),
+                    "video_meta": {
+                        "title": f"导入提示词直出 · {pname}",
+                        "original_featured_item": pname,
+                    },
+                },
+            )
+            total_usage.add(usage)
+            stats["input_tokens"] = total_usage.input_tokens
+            stats["output_tokens"] = total_usage.output_tokens
+            stats["estimated_cost_cny"] = estimate_cost_cny(
+                total_usage.input_tokens, total_usage.output_tokens, "gpt-4.1"
+            )
+
+        # Guarantee clean fields and open Step 1 for quick review (or Step 2 directly!)
         if pasted_prompt_text.strip() and not deep_res.director_plan.current_master_prompt_cn.strip():
             deep_res.director_plan.current_master_prompt_cn = pasted_prompt_text.strip()
         if not deep_res.director_plan.original_video_prompt_cn.strip():
