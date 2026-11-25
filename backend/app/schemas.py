@@ -448,10 +448,17 @@ class GenerateAllVideosRequest(BaseModel):
     enable_sound: bool = False
 
 
+class ExtractLastFrameRequest(BaseModel):
+    target_shot_no: int
+    source_video_asset_id: str
+    scene_title: str = ""
+
+
 class StitchFinalVideoRequest(BaseModel):
     asset_ids: list[str] = Field(default_factory=list)
     include_images_as_motion: bool = True
     image_clip_duration: float = 3.5
+    trim_to_planned_duration: bool = True
     sfx_mode: Literal["auto_match_source", "source_audio_only", "kling_v2a", "none"] = "auto_match_source"
     sfx_prompt: str = ""
     enable_voiceover: bool = False

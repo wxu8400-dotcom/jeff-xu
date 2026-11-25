@@ -37,6 +37,7 @@ from ..schemas import (
     CreateDirectorMemoryRequest,
     DirectorMemoryOut,
     DirectorRevisionResponse,
+    ExtractLastFrameRequest,
     GenerateAllImagesRequest,
     GenerateAllVideosRequest,
     GenerateImageRequest,
@@ -82,7 +83,11 @@ from ..services.video_processor import (
     load_source_audio_bytes,
     load_source_evidence_images,
 )
-from ..services.video_stitcher import stitch_media_items_to_mp4
+from ..services.video_stitcher import (
+    extract_last_frame_jpeg,
+    parse_planned_shot_duration_sec,
+    stitch_media_items_to_mp4,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -641,8 +646,13 @@ async def _prepare_shot_image_inputs(
 
     if include_product and product_refs:
         # Attach up to 3 multi-angle product reference images so generated frames preserve
-        # front/side/detail fidelity faithfully.
+        # front/side/detail fidelity faithfully — while STRICTLY isolating the product from
+        # any showroom/wall/curtain/plant background in the uploaded product photos.
         final_refs.extend(product_refs[:3])
+        prompt_additions.append(
+            "ISOLATE PRODUCT ONLY: Extract ONLY the target product itself from the attached product reference photo(s); "
+            "COMPLETELY IGNORE and NEVER copy any walls, slatted panels, curtains, tables, plants, floors, or showroom background from the product photo."
+        )
 
     if has_person:
         if char_en and char_en[:24].lower() not in prompt.lower():
@@ -1837,6 +1847,56 @@ async def upload_custom_bgm(
     return _serialize_asset(asset)
 
 
+@router.post("/videos/{video_id}/extract-last-frame", response_model=GeneratedAssetOut)
+async def extract_last_frame_for_next_shot(
+    video_id: str,
+    body: ExtractLastFrameRequest,
+    db: Annotated[Session, Depends(get_db)],
+) -> GeneratedAssetOut:
+    """Universal continuity rule: extract the crisp last frame of any completed video clip
+    (typically Shot N-1) and save it as the first-frame image of target_shot_no (Shot N),
+    eliminating scene/background/camera jumps across consecutive shots in ANY video."""
+    if not is_ffmpeg_available():
+        raise HTTPException(status_code=400, detail="当前环境未检测到 FFmpeg，无法提取尾帧")
+    video, session = _get_video_and_session(db, video_id)
+    src_vid = db.scalars(
+        select(GeneratedAsset)
+        .options(defer(GeneratedAsset.file_data))
+        .where(GeneratedAsset.id == body.source_video_asset_id)
+    ).first()
+    if not src_vid or src_vid.video_id != video.id:
+        raise HTTPException(status_code=404, detail="源视频片段不存在")
+    raw_vid = await _load_asset_bytes(src_vid, db)
+    if not raw_vid:
+        raise HTTPException(status_code=400, detail="源视频片段文件尚未就绪")
+
+    try:
+        jpg_bytes = await asyncio.to_thread(extract_last_frame_jpeg, raw_vid)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"提取尾帧失败：{exc}") from exc
+
+    asset = GeneratedAsset(
+        video_id=video.id,
+        session_id=session.id,
+        asset_type="image",
+        slot_index=body.target_shot_no,
+        shot_no=body.target_shot_no,
+        scene_title=body.scene_title.strip()
+        or f"分镜 {body.target_shot_no} 首帧（继承分镜 {src_vid.shot_no or ''} 尾帧）",
+        provider="ffmpeg_last_frame",
+        model_name="last-frame-inherit",
+        status="completed",
+        prompt_used=f"继承自 {src_vid.scene_title or src_vid.id} 尾帧，保持场景与构图 100% 连续",
+        mime_type="image/jpeg",
+    )
+    db.add(asset)
+    db.flush()
+    _save_asset_media(asset, jpg_bytes)
+    db.commit()
+    db.refresh(asset)
+    return _serialize_asset(asset)
+
+
 @router.post("/videos/{video_id}/stitch-final", response_model=GeneratedAssetOut)
 async def stitch_final_video(
     video_id: str,
@@ -1867,6 +1927,21 @@ async def stitch_final_video(
     ordered_media: list[tuple[str, bytes, float]] = []
     used_labels: list[str] = []
 
+    # Build universal per-shot planned duration map from storyboard time_range (e.g. '约3秒', '1.5-3秒')
+    planned_dur_by_shot: dict[int, float] = {}
+    for idx, shot in enumerate(list((video.analysis_json or {}).get("storyboard") or []), start=1):
+        if isinstance(shot, dict):
+            sno = int(shot.get("shot_no") or idx)
+            planned_dur_by_shot[sno] = parse_planned_shot_duration_sec(
+                str(shot.get("time_range") or ""),
+                default=3.0,
+            )
+
+    def _target_dur_for_row(row: GeneratedAsset, fallback: float) -> float:
+        if body.trim_to_planned_duration and row.shot_no and row.shot_no in planned_dur_by_shot:
+            return planned_dur_by_shot[row.shot_no]
+        return fallback
+
     if body.asset_ids:
         for aid in body.asset_ids:
             row = by_id.get(aid)
@@ -1876,10 +1951,14 @@ async def stitch_final_video(
             if not raw_bytes:
                 continue
             if row.asset_type in ("video_clip", "uploaded_clip"):
-                ordered_media.append(("video", raw_bytes, row.duration_sec or 5.0))
+                ordered_media.append(
+                    ("video", raw_bytes, _target_dur_for_row(row, row.duration_sec or 5.0))
+                )
                 used_labels.append(row.scene_title or f"镜头{row.shot_no}")
             elif row.asset_type == "image" and body.include_images_as_motion:
-                ordered_media.append(("image", raw_bytes, body.image_clip_duration))
+                ordered_media.append(
+                    ("image", raw_bytes, _target_dur_for_row(row, body.image_clip_duration))
+                )
                 used_labels.append(row.scene_title or f"镜头{row.shot_no}")
     else:
         latest_upload: dict[int, GeneratedAsset] = {}
@@ -1905,32 +1984,34 @@ async def stitch_final_video(
                 r = latest_upload[sno]
                 raw = await _load_asset_bytes(r, db)
                 if raw:
-                    ordered_media.append(("video", raw, r.duration_sec or 5.0))
+                    ordered_media.append(("video", raw, _target_dur_for_row(r, r.duration_sec or 5.0)))
                     used_labels.append(f"分镜{sno}(实拍)")
                     continue
             if sno in latest_ai_vid:
                 r = latest_ai_vid[sno]
                 raw = await _load_asset_bytes(r, db)
                 if raw:
-                    ordered_media.append(("video", raw, r.duration_sec or 5.0))
+                    ordered_media.append(("video", raw, _target_dur_for_row(r, r.duration_sec or 5.0)))
                     used_labels.append(f"分镜{sno}(可灵AI)")
                     continue
             if body.include_images_as_motion and sno in latest_img:
                 r = latest_img[sno]
                 raw = await _load_asset_bytes(r, db)
                 if raw:
-                    ordered_media.append(("image", raw, body.image_clip_duration))
+                    ordered_media.append(("image", raw, _target_dur_for_row(r, body.image_clip_duration)))
                     used_labels.append(f"分镜{sno}(AI图转动态)")
 
     if not ordered_media:
         raise HTTPException(
             status_code=400,
-            detail="暂无可拼接的分镜素材，请先点击「一键生成全部分镜商品图」或上传实拍视频片段",
+            detail="暂无可拼接的分镜素材，请先逐镜生成分镜商品图或上传实拍视频片段",
         )
 
     try:
         final_bytes, total_dur = await asyncio.to_thread(
-            stitch_media_items_to_mp4, ordered_media
+            stitch_media_items_to_mp4,
+            ordered_media,
+            trim_videos_to_duration=body.trim_to_planned_duration,
         )
     except Exception as exc:
         logger.exception("FFmpeg stitch failed for video %s: %s", video_id, exc)

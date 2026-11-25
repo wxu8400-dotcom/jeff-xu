@@ -71,6 +71,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
     "auto_match_source" | "source_audio_only" | "kling_v2a" | "none"
   >("auto_match_source");
   const [sfxPrompt, setSfxPrompt] = useState<string>("");
+  const [trimToPlannedDuration, setTrimToPlannedDuration] = useState<boolean>(true);
   const [bgmMode, setBgmMode] = useState<"none" | "ambient_chill" | "upbeat_pulse" | "custom">(
     "none"
   );
@@ -267,6 +268,24 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
     }
   };
 
+  const handleInheritPrevLastFrame = async (targetShotNo: number, prevVideoId: string) => {
+    const key = `img-${targetShotNo}`;
+    setBusySlots((prev) => ({ ...prev, [key]: true }));
+    try {
+      await api.extractLastFrameForNextShot(video.id, {
+        target_shot_no: targetShotNo,
+        source_video_asset_id: prevVideoId,
+        scene_title: `分镜 ${targetShotNo} 首帧（继承分镜 ${targetShotNo - 1} 尾帧）`,
+      });
+      onToast(`🔗 已提取分镜 ${targetShotNo - 1} 尾帧作为分镜 ${targetShotNo} 首帧，画面无缝衔接！`);
+      await loadState(true);
+    } catch (err) {
+      onToast(err instanceof Error ? err.message : "提取上一镜尾帧失败");
+    } finally {
+      setBusySlots((prev) => ({ ...prev, [key]: false }));
+    }
+  };
+
   const handleRefineImage = async (slotIndex: number, shot?: StoryboardShot) => {
     const fb = (imageFixInputs[slotIndex] || "").trim();
     if (!fb) {
@@ -447,6 +466,7 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
         asset_ids: orderedIds,
         include_images_as_motion: true,
         image_clip_duration: 3.5,
+        trim_to_planned_duration: trimToPlannedDuration,
         sfx_mode: sfxMode,
         sfx_prompt: sfxPrompt,
         enable_voiceover: enableVoiceover,
@@ -787,6 +807,15 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
                 </span>
               )}
             </div>
+            <label className="inline-flex items-center gap-1.5 text-[11px] text-emerald-100/90 cursor-pointer pt-0.5">
+              <input
+                type="checkbox"
+                checked={trimToPlannedDuration}
+                onChange={(e) => setTrimToPlannedDuration(e.target.checked)}
+                className="rounded border-emerald-500/50 bg-slate-950 text-emerald-500"
+              />
+              ✂️ 按各分镜计划时长自动精剪合成（推荐：自动裁去 5 秒素材多余尾帧，防止成片拖沓与原片音轨错位循环）
+            </label>
             {sfxMode === "kling_v2a" && (
               <input
                 type="text"
@@ -1331,7 +1360,25 @@ export const StudioWorkbench: React.FC<Props> = ({ video, onAnalysisUpdated, onT
                           ? "步骤 A：AI 复刻场景首帧图"
                           : "步骤 A：AI 替换商品首帧图"}
                       </span>
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {shot.shot_no >= 2 &&
+                          (() => {
+                            const prevVid =
+                              latestVideoByShot[shot.shot_no - 1] ||
+                              latestUploadByShot[shot.shot_no - 1];
+                            if (!prevVid || prevVid.status !== "completed") return null;
+                            return (
+                              <button
+                                type="button"
+                                disabled={isImgBusy}
+                                onClick={() => handleInheritPrevLastFrame(shot.shot_no, prevVid.id)}
+                                className="px-2 py-1 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/50 disabled:opacity-50 text-sky-200 font-semibold text-[11px] inline-flex items-center gap-1"
+                                title={`直接提取分镜 ${shot.shot_no - 1} 视频的最后一帧作为本镜首帧，避免换场景/跳切穿帮`}
+                              >
+                                🔗 继承分镜 {shot.shot_no - 1} 尾帧
+                              </button>
+                            );
+                          })()}
                         <button
                           type="button"
                           onClick={() =>

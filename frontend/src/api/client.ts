@@ -359,12 +359,30 @@ export const api = {
     );
   },
 
+  extractLastFrameForNextShot: (
+    videoId: string,
+    payload: {
+      target_shot_no: number;
+      source_video_asset_id: string;
+      scene_title?: string;
+    }
+  ) =>
+    apiFetch<GeneratedAsset>(
+      `/api/studio/videos/${encodeURIComponent(videoId)}/extract-last-frame`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }
+    ),
+
   stitchFinalVideo: (
     videoId: string,
     payload: {
       asset_ids?: string[];
       include_images_as_motion?: boolean;
       image_clip_duration?: number;
+      trim_to_planned_duration?: boolean;
       sfx_mode?: "auto_match_source" | "source_audio_only" | "kling_v2a" | "none";
       sfx_prompt?: string;
       enable_voiceover?: boolean;

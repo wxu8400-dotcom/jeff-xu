@@ -19,6 +19,31 @@ from app.services.video_processor import (
     is_ffmpeg_available,
     merge_shot_and_uniform_timestamps,
 )
+from app.services.video_stitcher import (
+    extract_last_frame_jpeg,
+    image_to_motion_clip,
+    parse_planned_shot_duration_sec,
+)
+
+
+def test_parse_planned_shot_duration_sec_handles_universal_formats() -> None:
+    assert parse_planned_shot_duration_sec("约3秒") == 3.0
+    assert parse_planned_shot_duration_sec("成片约2秒") == 2.0
+    assert parse_planned_shot_duration_sec("00:00-00:03") == 3.0
+    assert parse_planned_shot_duration_sec("1.5-3秒") == 1.5
+    assert parse_planned_shot_duration_sec("6-7.5s") == 1.5
+    assert parse_planned_shot_duration_sec("约2-3秒") == 2.5
+
+
+def test_extract_last_frame_jpeg_from_real_clip() -> None:
+    if not is_ffmpeg_available():
+        return
+    clip = image_to_motion_clip(_make_sample_jpeg((190, 90, 30)), duration_sec=2.0)
+    last_jpg = extract_last_frame_jpeg(clip)
+    assert len(last_jpg) > 1000
+    with Image.open(io.BytesIO(last_jpg)) as im:
+        assert im.format == "JPEG"
+        assert im.width >= 600
 
 
 def test_align_source_audio_to_duration_stretches_cleanly() -> None:
