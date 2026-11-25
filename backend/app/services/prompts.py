@@ -426,6 +426,220 @@ def build_director_revision_prompt(
 }}"""
 
 
+def build_prompt_audit_and_revision_prompt(
+    *,
+    product_dna: ProductDNA,
+    current_analysis: dict[str, Any],
+    reference_prompt_text: str,
+    modification_notes: str,
+    source_frame_count: int,
+    source_timestamps: list[float],
+    prompt_screenshot_count: int,
+    product_photo_count: int,
+    revision_history: list[dict[str, Any]],
+    director_memory_block: str = "",
+) -> str:
+    """Visual-grounded frame-by-frame prompt auditor & 3-part prompt generator.
+    Synthesizes best practices from replicate-video-ad, video-prompt-reverse,
+    reverse-video-prompts, and video-prompt-verifier:
+    1) Visually audits the user's reference prompt against the REAL original video contact sheet & keyframes.
+    2) Applies user modifications + multi-angle product photos.
+    3) Outputs the exact 3-part production package:
+       Part 1: 全片统一参考提示词 (Global Reference / Consistency Bible)
+       Part 2: 可控分镜表 (镜头/时长 | 关键帧图片内容 | 图生视频动态提示词) -> synced 1:1 with storyboard, chatgpt_images_prompts, kling_prompts
+       Part 3: 全片统一防穿帮约束 (Negative Constraints)
+    """
+    curr_plan = dict(current_analysis.get("director_plan") or {})
+    orig_cn = str(
+        curr_plan.get("original_video_prompt_cn")
+        or curr_plan.get("original_plot_summary")
+        or ""
+    )
+    prev_global = str(curr_plan.get("global_reference_prompt_cn") or "")
+    prev_master = str(curr_plan.get("current_master_prompt_cn") or "")
+
+    ts_summary = (
+        ", ".join(f"{t:.2f}s" for t in source_timestamps[:16])
+        if source_timestamps
+        else "已按原片时间轴均匀采样"
+    )
+    dna_json = json.dumps(
+        {
+            "product_name": product_dna.product_name,
+            "category": product_dna.category,
+            "physical_form": product_dna.physical_form,
+            "core_selling_points": product_dna.core_selling_points[:4],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+    hist_json = json.dumps(revision_history[-4:], ensure_ascii=False, indent=2)
+    memory_section = f"\n\n{director_memory_block}\n" if director_memory_block.strip() else ""
+
+    image_index_lines: list[str] = []
+    cursor = 1
+    if source_frame_count > 0:
+        image_index_lines.append(
+            f"- 第 {cursor} ~ {cursor + source_frame_count - 1} 张图：【原视频逐帧真实画面证据】（含带精确秒数水印的全片接触表 Contact Sheet 与关键切镜高清帧，时间轴覆盖：{ts_summary}）"
+        )
+        cursor += source_frame_count
+    if prompt_screenshot_count > 0:
+        image_index_lines.append(
+            f"- 第 {cursor} ~ {cursor + prompt_screenshot_count - 1} 张图：【用户提供的参考提示词截图】（请逐字识别截图中的全片参考、分镜表与约束）"
+        )
+        cursor += prompt_screenshot_count
+    if product_photo_count > 0:
+        image_index_lines.append(
+            f"- 第 {cursor} ~ {cursor + product_photo_count - 1} 张图：【用户待替换商品的多角度实拍图】（精确锁定产品外观、颜色、比例、材质与配件，不带入背景杂物）"
+        )
+    image_map_text = "\n".join(image_index_lines) if image_index_lines else "（本次无附带图片，请依据文字基准执行）"
+
+    return f"""你是顶级商业短视频复刻导演与 **AI 视频提示词逐帧审计专家**（融合 `replicate-video-ad`、`video-prompt-reverse` 与可灵 Kling 生产规范）。
+你现在的任务不是凭空脑补，而是执行严格的 **【原片逐帧核对 → 纠偏补全 → 融合修改 → 三段式生产包输出】** 工作流！{memory_section}
+
+【随附图片精确索引（按顺序一一对应）】
+{image_map_text}
+
+【任务一：原片逐帧画面 × 用户参考提示词 交叉核对审计（`prompt_audit_report`）】
+- 请把上面【原视频逐帧真实画面证据】里的每一个切镜、景别、主体位置、动作方向、关键转场（尤其是容易被漏掉的前景遮挡转场、抛投/落点/爆发/回切瞬间）与用户提交的参考提示词（文字和/或截图）逐段比对：
+  - 若用户没有提供外部参考提示词（只写了修改要求），则核对系统初版原片拆解与真实原片帧是否一致，补齐任何遗漏细节；
+  - 如实填写 `prompt_audit_report`：
+    - `verdict`：`"accurate"`（基本完全吻合）| `"minor_gaps"`（发现局部细节或转场遗漏，已按原片补全）| `"major_mismatch"`（发现关键镜头偏差或漏镜，已按原片纠偏）；
+    - `summary`：2~3 句直白中文结论，说清参考提示词哪里对、哪里与原片逐帧不符以及怎么修正了；
+    - `matched_points`：核对无误的要点（2~4 条）；
+    - `issues_found`：核对发现的遗漏、错位或不一致之处（若无写空数组）；
+    - `fixes_applied`：本次输出中已按原片真实画面自动补齐/修正的具体改动（1~4 条）。
+
+【任务二：融合用户修改要求 + 多角度商品图，输出通用「三段式」可执行提示词包】
+本结构适用于**任意短视频复刻**（不限任何品类），请严格按以下三部分输出，并**100% 落实用户的所有修改要求**：
+
+1. **第一部分：全片统一参考提示词（`global_reference_prompt_cn` / `global_reference_prompt_en`）**
+   - 用途：用于制作人物、场景和各镜头关键帧的统一视觉圣经。
+   - 必须写清：画幅与摄影质感（如 9:16 竖屏、写实电影/手机广角质感）、产品外观严格锚定（精确描述上传商品图的真实颜色、轮廓比例、材质纹理与配件，声明只参考商品本体不带入展厅/杂物背景）、全片统一人物（同一张脸、同一发型、服装与气质，若无人物写明纯场景/产品）、核心场景内饰与空间关系、真实材质自然光影、画面不生成文字/Logo/平台界面。
+
+2. **第二部分：拆分为 3~6 个可控制的镜头（直接写入 `storyboard` + `chatgpt_images_prompts` + `kling_prompts`）**
+   - **关键原则（先定静态关键帧，再写图生视频动态）**：
+     - 每一行镜头必须拆清楚：**（A）关键帧图片内容**（用于先生成静态首帧图供用户确认）和 **（B）图生视频动态提示词**（用于拿确认好的首帧图交给可灵 Kling I2V 动起来）！
+     - `storyboard[i]`：写出清晰的 `shot_no`（1..N）、`time_range`（建议成片时长，如 `约3秒`、`约2秒`）、`shot_size`、`camera_movement`、`original_visual`（对应原片哪一拍）、`adapted_visual_for_product`（修改后的镜头摘要，含镜头短标题如「展示并抛出」）、`has_person`、`replication_action`（出现目标商品标 `"insert_product"`，纯环境/无商品过渡标 `"keep_scene"`）。
+     - `chatgpt_images_prompts`：
+       - **索引 0**：主视觉海报（封面图）；
+       - **索引 1..N**：严格一一对应镜头 1..N 的**关键帧图片内容**！
+       - `scene_title` 写简短镜头名（如 `① 展示并抛出（约3秒）`）；
+       - `prompt_cn` 写清晰简洁的关键帧静态画面描述（人物位置、商品状态、机位构图、前景背景）；
+       - `prompt_en` 写完整的照片级写实英文生图提示词（自动带上 `global_reference_prompt_en` 的统一人物与商品外观锚定，写明 `Keep the exact product from the uploaded reference images, ignoring any background clutter from the product photos`，严禁卡通/动漫/文字/水印）。
+     - `kling_prompts`：
+       - **索引 0..N-1**：严格一一对应镜头 1..N 的**图生视频（I2V）动态提示词**！
+       - `prompt_cn` 写可直接复制给可灵的中文动态指令（明确“保持首帧人物与产品外观不变”+ 清晰的物理动作轨迹、镜头跟随方向、速度变化、遮挡/转场收尾）；
+       - `prompt_en` 写对应的英文可灵 I2V 动态指令；
+       - `negative_prompt` 直接填入第三部分的统一排除约束！
+
+3. **第三部分：每段附加同一组统一约束（`negative_constraints`）**
+   - 凝练成一段可直接附在每段提示词或负向框里的统一防穿帮约束（例如：避免产品换款、颜色漂移、纹理消失、配件增减、生成多余产品、产品解体变形、人物换脸、手指畸形、穿模、场景漂移、画面出现文字或水印）。
+
+4. **同时拼装完整总览版（`current_master_prompt_cn` / `current_master_prompt_en`）**
+   - 把第一部分 + 第二部分完整分镜节奏 + 第三部分整理成一份排版清晰、可直接整段复制的完整总提示词。
+
+目标商品信息：
+{dna_json}
+
+系统初版原片画面基准：
+{orig_cn or "（请以随附原视频逐帧证据图为准）"}
+
+上一版统一参考提示词（如有）：
+{prev_global or prev_master[:400] or "无"}
+
+用户提交的参考提示词文本（如有，可能包含三段式内容或 Codex 拆解文本）：
+{reference_prompt_text or "（无纯文本，请结合上方参考提示词截图或原片逐帧画面核对）"}
+
+用户本次修改要求（最高优先级，必须 100% 精准落实！）：
+{modification_notes or "按原视频逐帧真实画面核对修正上方提示词，补齐任何遗漏细节并严格对齐上传商品图"}
+
+最近修改历史：
+{hist_json}
+
+请严格输出纯 JSON（不要附加任何多余说明文字），结构如下：
+{{
+  "director_reply": "1~2句简洁确认：说明已对照原片逐帧完成核对并按你的修改意见生成了三段式可控提示词",
+  "changed_shots": [1, 2, 3],
+  "prompt_audit_report": {{
+    "verdict": "minor_gaps",
+    "summary": "已逐帧比对原视频与你提供的提示词：核心创意与主线节奏一致，但发现 1 处关键转场细节遗漏，已按原片真实画面自动补全并融合了你的修改要求。",
+    "matched_points": [
+      "开场机位与主体动作与原片 0.15s–2.0s 真实帧吻合",
+      "结尾回到主场景的情绪落点与原片一致"
+    ],
+    "issues_found": [
+      "原片中段存在高速飞向镜头形成前景遮挡的转场帧，参考提示词未写清该衔接"
+    ],
+    "fixes_applied": [
+      "在对应镜头补入前景遮挡转场动作，保证前后镜头无缝衔接",
+      "已结合上传商品多角度实拍图锁定外观材质与细节"
+    ]
+  }},
+  "global_reference_prompt_cn": "第一部分：全片统一参考提示词（画幅质感 + 产品外观严格锚定 + 统一人物设定 + 统一场景与空间关系 + 光影与无文字水印要求）",
+  "global_reference_prompt_en": "Part 1: Global consistency bible in English (9:16 photorealistic cinema look, exact product appearance lock, consistent character & scene)",
+  "current_master_prompt_cn": "完整汇总版中文总提示词（整合全片统一参考 + 各可控镜头关键帧与动态说明）",
+  "current_master_prompt_en": "Complete combined English master prompt",
+  "negative_constraints": "避免产品换款、颜色漂移、纹理消失、配件增减、生成多余产品、产品解体变形、人物换脸、手指畸形、穿模、场景漂移、画面文字或水印",
+  "ai_character_profile_cn": "全片统一人物中文设定（若无人物写'无人物'）",
+  "ai_character_profile_en": "Consistent photorealistic real human English profile (empty if no person)",
+  "adapted_script_cn": "简短配套中文口播（纯视觉可留空）",
+  "adapted_script_en": "Short matching English line (empty if visual-only)",
+  "learned_memories": [
+    {{
+      "category": "product_replacement",
+      "product_scope": "global",
+      "rule_summary": "一句可复用的创作偏好规则",
+      "example_snippet": "本次创意简述"
+    }}
+  ],
+  "storyboard": [
+    {{
+      "shot_no": 1,
+      "time_range": "约3秒",
+      "shot_size": "广角中近景",
+      "camera_movement": "跟随俯拍",
+      "original_visual": "对应原片该段真实帧画面",
+      "adapted_visual_for_product": "展示并抛出：人物在主场景展示迷你版产品并抛出",
+      "audio_sfx": "环境风声与动作音效",
+      "production_mode": "ai",
+      "real_shoot_guide": "",
+      "spoken_line": "",
+      "replication_action": "insert_product",
+      "director_advice": "",
+      "has_person": true
+    }}
+  ],
+  "chatgpt_images_prompts": [
+    {{
+      "scene_title": "主视觉封面图",
+      "usage_note": "自动融合上传的多角度商品图",
+      "aspect_ratio": "9:16",
+      "prompt_en": "Keep the exact product from the uploaded reference images...",
+      "prompt_cn": "严格保持上传商品外观一致的主视觉封面..."
+    }},
+    {{
+      "scene_title": "① 展示并抛出 / 约3秒",
+      "usage_note": "先生成关键帧图确认正确，再用图生视频动态提示词生成视频",
+      "aspect_ratio": "9:16",
+      "prompt_en": "Photorealistic vertical 9:16 cinema keyframe...",
+      "prompt_cn": "关键帧图片内容：简洁清晰描述该镜头首帧的构图、人物位置与产品状态"
+    }}
+  ],
+  "kling_prompts": [
+    {{
+      "shot_no": 1,
+      "scene_title": "① 展示并抛出 / 约3秒",
+      "mode": "图生视频 (I2V)",
+      "recommended_params": "时长: 5s | 画质: 高品质",
+      "prompt_cn": "保持人物与产品外观不变。清晰描述该镜头从首帧开始的连续动作、物理轨迹、镜头跟随与结尾状态",
+      "prompt_en": "Keep the exact character and product unchanged from the first frame. Smooth cinematic motion...",
+      "negative_prompt": "避免产品换款、颜色漂移、纹理消失、人物换脸、手指畸形、穿模、画面文字或水印"
+    }}
+  ]
+}}"""
+
+
 def build_image_refinement_prompt(
     *,
     product_name: str,

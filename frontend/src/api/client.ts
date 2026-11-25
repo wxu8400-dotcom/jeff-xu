@@ -136,10 +136,46 @@ export const api = {
       method: "DELETE",
     }),
 
+  auditRevisePrompt: (
+    videoId: string,
+    payload: {
+      referencePromptText?: string;
+      modificationNotes?: string;
+      promptImages?: File[];
+    }
+  ) => {
+    const fd = new FormData();
+    if (payload.referencePromptText) {
+      fd.append("reference_prompt_text", payload.referencePromptText);
+    }
+    if (payload.modificationNotes) {
+      fd.append("modification_notes", payload.modificationNotes);
+    }
+    for (const file of payload.promptImages || []) {
+      fd.append("prompt_images", file);
+    }
+    return apiFetch<{
+      ok: boolean;
+      director_reply: string;
+      prompt_audit_report?: import("../types/radar").PromptAuditReport | null;
+      changed_shots: number[];
+      learned_memories: DirectorMemoryItem[];
+      analysis_json: VideoDeepAnalysis;
+    }>(`/api/studio/videos/${encodeURIComponent(videoId)}/audit-revise`, {
+      method: "POST",
+      body: fd,
+    });
+  },
+
   lockDirectorPlan: (
     videoId: string,
     locked: boolean,
-    overrides?: { master_prompt_cn?: string; master_prompt_en?: string }
+    overrides?: {
+      master_prompt_cn?: string;
+      master_prompt_en?: string;
+      global_reference_prompt_cn?: string;
+      negative_constraints?: string;
+    }
   ) =>
     apiFetch<{
       ok: boolean;

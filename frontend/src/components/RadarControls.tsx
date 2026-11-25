@@ -92,34 +92,34 @@ export const RadarControls: React.FC<Props> = ({
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
-          onClick={() => onChange({ ...params, mode: "prompt_import" })}
+          onClick={() => onChange({ ...params, mode: "direct_urls" })}
           className={`flex-1 sm:flex-none px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 border transition ${
+            params.mode === "direct_urls"
+              ? "bg-sky-500/20 border-sky-400 text-sky-200"
+              : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
+          }`}
+        >
+          <Link2 className="w-4 h-4" />
+          🔗 粘贴原视频链接逐帧解析（推荐）
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange({ ...params, mode: "prompt_import" })}
+          className={`flex-1 sm:flex-none px-4 py-2 rounded-xl text-xs sm:text-sm font-medium flex items-center justify-center gap-1.5 border transition ${
             params.mode === "prompt_import"
               ? "bg-emerald-500/20 border-emerald-400 text-emerald-200"
               : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
           }`}
         >
           <ImagePlus className="w-4 h-4" />
-          📋 导入提示词截图 / 文本直出视频（推荐）
-        </button>
-        <button
-          type="button"
-          onClick={() => onChange({ ...params, mode: "direct_urls" })}
-          className={`flex-1 sm:flex-none px-4 py-2 rounded-xl text-xs sm:text-sm font-medium flex items-center justify-center gap-1.5 border transition ${
-            params.mode === "direct_urls"
-              ? "bg-purple-500/20 border-purple-400 text-purple-200"
-              : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
-          }`}
-        >
-          <Link2 className="w-4 h-4" />
-          粘贴链接拆解（TK / INS / YT）
+          纯提示词截图直出
         </button>
         <button
           type="button"
           onClick={() => onChange({ ...params, mode: "radar" })}
           className={`flex-1 sm:flex-none px-4 py-2 rounded-xl text-xs sm:text-sm font-medium flex items-center justify-center gap-1.5 border transition ${
             params.mode === "radar"
-              ? "bg-sky-500/20 border-sky-400 text-sky-200"
+              ? "bg-purple-500/20 border-purple-400 text-purple-200"
               : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
           }`}
         >

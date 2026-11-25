@@ -91,15 +91,27 @@ export interface DirectorMemoryItem {
   updated_at: string;
 }
 
+export interface PromptAuditReport {
+  verdict: "accurate" | "minor_gaps" | "major_mismatch" | "verified" | string;
+  summary: string;
+  matched_points: string[];
+  issues_found: string[];
+  fixes_applied: string[];
+}
+
 export interface DirectorPlan {
   original_plot_summary?: string;
   original_video_prompt_cn?: string;
   original_video_prompt_en?: string;
+  global_reference_prompt_cn?: string;
+  global_reference_prompt_en?: string;
   current_master_prompt_cn?: string;
   current_master_prompt_en?: string;
   negative_constraints?: string;
+  prompt_audit_report?: PromptAuditReport | null;
   has_user_customized?: boolean;
   keyframe_previews?: string[];
+  keyframe_timestamps?: number[];
   ai_character_profile_cn?: string;
   ai_character_profile_en?: string;
   product_placement_plan?: string;

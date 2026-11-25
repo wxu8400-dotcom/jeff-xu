@@ -3,13 +3,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 
-from ..config import Settings, get_settings
+from ..config import DATA_DIR, Settings, get_settings
 from ..database import get_session_factory
 from ..models import ScanSession, VideoRecord
 from ..schemas import (
@@ -31,7 +32,11 @@ from .prompts import (
     build_product_dna_prompt,
     build_prompt_import_prompt,
 )
-from .video_processor import download_and_compress_video, extract_filmstrip_previews
+from .video_processor import (
+    download_and_compress_video,
+    extract_filmstrip_previews,
+    save_source_evidence_pack,
+)
 from .viral_templates import (
     is_cartoon_or_animation_text,
     item_matches_same_category,
@@ -613,14 +618,27 @@ async def run_radar_pipeline(
                 stats["warnings"].append(f"视频 {cand.platform_video_id} 拆解失败：{exc}")
                 continue
 
-            # Populate genuine filmstrip previews (starting from 0.15s opening frame!) and
-            # ensure current_master_prompt_cn/en are initialized cleanly from original_video_prompt.
+            # Pre-generate record ID so we can persist the timestamped Contact Sheet + HD
+            # scene-cut evidence frames on disk for later visual prompt-vs-video auditing!
+            video_record_id = str(uuid.uuid4())
             if compressed_video:
-                previews = await asyncio.to_thread(
-                    extract_filmstrip_previews, compressed_video, 8
+                evidence = await asyncio.to_thread(
+                    save_source_evidence_pack,
+                    video_record_id,
+                    compressed_video,
+                    DATA_DIR / "media",
+                    max_frames=16,
                 )
+                previews = list(evidence.get("previews") or [])
+                ts_list = [float(t) for t in (evidence.get("timestamps") or [])]
+                if not previews:
+                    previews = await asyncio.to_thread(
+                        extract_filmstrip_previews, compressed_video, 8
+                    )
                 if previews:
                     deep_res.director_plan.keyframe_previews = previews
+                if ts_list:
+                    deep_res.director_plan.keyframe_timestamps = ts_list
             elif cover_images:
                 import base64 as _b64
 
@@ -649,6 +667,7 @@ async def run_radar_pipeline(
             db = factory()
             try:
                 record = VideoRecord(
+                    id=video_record_id,
                     session_id=session_id,
                     platform=cand.platform,
                     platform_video_id=cand.platform_video_id,

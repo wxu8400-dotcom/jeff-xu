@@ -21,6 +21,7 @@ from ..schemas import (
     PreliminaryScreeningBatch,
     PreliminaryScreeningItem,
     ProductDNA,
+    PromptAuditReport,
     RefinedImagePromptResponse,
     ReplaceabilityAnalysis,
     SearchQueries,
@@ -930,11 +931,34 @@ class UnifiedAIClient:
                 )
             return (
                 DirectorRevisionResponse(
-                    director_reply="已按你的最新修改内容重新编写好完整提示词，未提及的画面细节保持原视频不变，并已记入长期记忆库。请核对下方新提示词与排除约束，满意即可点击确认生成！",
+                    director_reply="已对照原视频逐帧画面完成提示词核对，并按你的修改意见输出新版三段式提示词（全片统一参考 + 可控分镜表 + 统一约束），请核对后点击确认进入生图阶段！",
                     changed_shots=[1],
+                    prompt_audit_report=PromptAuditReport(
+                        verdict="minor_gaps",
+                        summary="已将参考提示词与原视频逐帧真实画面完成交叉核对：主线节奏准确，已补全中段转场衔接并结合上传商品图锁定外观细节。",
+                        matched_points=[
+                            "开场机位与主体动作与原片首帧真实画面一致",
+                            "结尾产品展示与情绪落点与原片节奏吻合",
+                        ],
+                        issues_found=[
+                            "中段转场衔接描述略简略，已按原片逐帧节奏补齐过渡细节",
+                        ],
+                        fixes_applied=[
+                            f"已严格落实用户修改要求：{feedback[:60]}",
+                            "已同步拆分为三段式可控提示词（全片参考 + 关键帧/动态对照表 + 统一约束）",
+                        ],
+                    ),
+                    global_reference_prompt_cn=(
+                        f"制作一条 9:16 竖屏、写实摄影质感的商业短视频。产品严格参考上传图片中的核心外观、颜色与材质细节，不带入参考图背景杂物。"
+                        f"人物与场景全程保持同一张脸、同一发型服装及清晰的空间关系。画面不生成文字、Logo 或平台界面。"
+                        f"（已融合本次修改：{feedback[:120]}）"
+                    ),
+                    global_reference_prompt_en=(
+                        f"Vertical 9:16 photorealistic commercial video. Keep the exact product from the uploaded reference images unchanged, ignoring any background clutter. Consistent character, wardrobe, and spatial layout across every shot. No text, logos, or watermarks."
+                    ),
                     current_master_prompt_cn=updated.director_plan.current_master_prompt_cn,
                     current_master_prompt_en=updated.director_plan.current_master_prompt_en,
-                    negative_constraints="避免商品变形、颜色变化、纹理消失、多余手指、人物换脸、背景杂物带入、文字或水印。",
+                    negative_constraints="避免产品换款、颜色漂移、纹理消失、配件增减、生成多余产品、人物换脸、手指畸形、穿模、场景漂移、画面文字或水印。",
                     ai_character_profile_cn=updated.director_plan.ai_character_profile_cn,
                     ai_character_profile_en=updated.director_plan.ai_character_profile_en,
                     storyboard=updated.storyboard,

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import base64
+import io
+import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -10,6 +14,8 @@ from pathlib import Path
 import httpx
 
 logger = logging.getLogger(__name__)
+
+_PTS_TIME_RE = re.compile(r"pts_time:([0-9]+(?:\.[0-9]+)?)")
 
 
 def is_ffmpeg_available() -> bool:
@@ -96,6 +102,93 @@ def _compute_inclusive_timestamps(duration: float, max_frames: int) -> list[floa
     return [round(start_ts + step * i, 2) for i in range(count)]
 
 
+def detect_scene_cut_timestamps(
+    input_path: Path,
+    *,
+    threshold: float = 0.22,
+    max_cuts: int = 12,
+) -> list[float]:
+    """Detect sharp shot cuts / transitions using FFmpeg scene-change scoring so fast
+    transitions (e.g. occlusion wipes, explosions, sudden cuts) are never missed."""
+    if not is_ffmpeg_available():
+        return []
+    try:
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-i",
+            str(input_path),
+            "-vf",
+            f"select='gt(scene,{threshold})',showinfo",
+            "-vsync",
+            "vfr",
+            "-f",
+            "null",
+            "-",
+        ]
+        res = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=25,
+            check=False,
+        )
+        stderr_text = res.stderr.decode("utf-8", errors="ignore")
+        raw_cuts = [float(m.group(1)) for m in _PTS_TIME_RE.finditer(stderr_text)]
+        deduped: list[float] = []
+        for ts in sorted(raw_cuts):
+            if ts < 0.25:
+                continue
+            if not deduped or (ts - deduped[-1]) >= 0.45:
+                deduped.append(round(ts, 2))
+            if len(deduped) >= max_cuts:
+                break
+        return deduped
+    except Exception as exc:
+        logger.debug("Scene cut detection skipped: %s", exc)
+        return []
+
+
+def merge_shot_and_uniform_timestamps(
+    duration: float,
+    scene_cuts: list[float],
+    max_frames: int = 16,
+) -> list[float]:
+    """Merge FFmpeg scene-cut timestamps (offset +0.12s into the new shot) with
+    inclusive uniform timestamps so both steady beats AND sudden cuts are captured."""
+    if duration <= 0.6 or max_frames <= 2:
+        return _compute_inclusive_timestamps(duration, max_frames)
+
+    end_ts = max(0.25, duration - 0.2)
+    anchors: list[float] = [0.15, round(end_ts, 2)]
+    for cut in scene_cuts:
+        # Sample right after the cut so the new shot is crisp rather than mid-dissolve
+        settled = round(min(end_ts, max(0.2, cut + 0.12)), 2)
+        anchors.append(settled)
+
+    # Deduplicate anchors within 0.35s
+    anchors.sort()
+    chosen: list[float] = []
+    for ts in anchors:
+        if not chosen or (ts - chosen[-1]) >= 0.35:
+            chosen.append(ts)
+    if len(chosen) > max_frames:
+        # Keep first, last, and evenly spread interior cuts
+        step = (len(chosen) - 1) / (max_frames - 1)
+        chosen = [chosen[round(i * step)] for i in range(max_frames)]
+        return sorted(set(chosen))
+
+    # Fill remaining budget with uniform timestamps
+    uniform = _compute_inclusive_timestamps(duration, max_frames)
+    min_gap = max(0.28, (duration / max(max_frames, 1)) * 0.45)
+    for ts in uniform:
+        if len(chosen) >= max_frames:
+            break
+        if all(abs(ts - existing) >= min_gap for existing in chosen):
+            chosen.append(ts)
+    return sorted(chosen)[:max_frames]
+
+
 def extract_keyframes_from_path(
     input_path: Path,
     max_frames: int = 10,
@@ -178,7 +271,10 @@ def extract_keyframes_with_timestamps(
         duration = _probe_duration_sec(tmp_path)
         results: list[tuple[float, bytes]] = []
         if duration and duration > 0.6:
-            timestamps = _compute_inclusive_timestamps(duration, max_frames)
+            scene_cuts = detect_scene_cut_timestamps(tmp_path, threshold=0.22, max_cuts=10)
+            timestamps = merge_shot_and_uniform_timestamps(
+                duration, scene_cuts, max_frames=max_frames
+            )
             for idx, ts in enumerate(timestamps):
                 out_jpg = tmp_dir / f"frame_{idx:02d}.jpg"
                 cmd = [
@@ -231,11 +327,9 @@ def extract_keyframes_from_bytes(
     ]
 
 
-def extract_filmstrip_previews(video_bytes: bytes, max_frames: int = 6) -> list[str]:
+def extract_filmstrip_previews(video_bytes: bytes, max_frames: int = 8) -> list[str]:
     """Extract compact base64 JPEG preview strip starting at 0.15s so the UI displays
     the genuine original video frames right above the prompt."""
-    import base64
-    import io
     from PIL import Image
 
     raw_frames = extract_keyframes_from_bytes(
@@ -254,6 +348,172 @@ def extract_filmstrip_previews(video_bytes: bytes, max_frames: int = 6) -> list[
         except Exception:
             continue
     return out
+
+
+def build_timestamped_contact_sheet(
+    frames_with_ts: list[tuple[float, bytes]],
+    *,
+    cols: int = 4,
+    tile_width: int = 270,
+    tile_height: int = 420,
+) -> bytes | None:
+    """Render a crisp timestamp-labeled contact sheet (inspired by replicate-video-ad &
+    video-prompt-reverse) so Vision LLMs can see the complete shot timeline in one glance."""
+    if not frames_with_ts:
+        return None
+    from PIL import Image, ImageDraw, ImageOps
+
+    count = len(frames_with_ts)
+    actual_cols = max(1, min(cols, count))
+    rows = (count + actual_cols - 1) // actual_cols
+    pad = 8
+    sheet_w = actual_cols * tile_width + (actual_cols + 1) * pad
+    sheet_h = rows * tile_height + (rows + 1) * pad
+    canvas = Image.new("RGB", (sheet_w, sheet_h), (12, 16, 28))
+    draw = ImageDraw.Draw(canvas)
+
+    for idx, (ts, raw) in enumerate(frames_with_ts):
+        r = idx // actual_cols
+        c = idx % actual_cols
+        x0 = pad + c * (tile_width + pad)
+        y0 = pad + r * (tile_height + pad)
+        try:
+            with Image.open(io.BytesIO(raw)) as im:
+                tile = ImageOps.fit(im.convert("RGB"), (tile_width, tile_height))
+                canvas.paste(tile, (x0, y0))
+        except Exception:
+            continue
+        label = f"#{idx + 1}  {ts:05.2f}s"
+        badge_w = min(tile_width - 12, 118)
+        draw.rectangle(
+            [x0 + 6, y0 + 6, x0 + 6 + badge_w, y0 + 28],
+            fill=(0, 0, 0),
+        )
+        draw.text((x0 + 12, y0 + 11), label, fill=(255, 255, 255))
+
+    buf = io.BytesIO()
+    canvas.save(buf, format="JPEG", quality=82, optimize=True)
+    return buf.getvalue()
+
+
+def save_source_evidence_pack(
+    video_id: str,
+    video_bytes: bytes,
+    media_dir: Path,
+    *,
+    max_frames: int = 16,
+) -> dict[str, object]:
+    """Extract scene-cut + dense HD keyframes, build a timestamped contact sheet, and persist
+    them to disk so later prompt-audit / revision calls can re-inspect the genuine source video."""
+    frames_with_ts = extract_keyframes_with_timestamps(
+        video_bytes, max_frames=max_frames, max_width=720
+    )
+    if not frames_with_ts:
+        return {"timestamps": [], "previews": [], "contact_sheet_saved": False}
+
+    ev_dir = media_dir / f"source_evidence_{video_id}"
+    ev_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamps: list[float] = []
+    manifest_frames: list[dict[str, object]] = []
+    for idx, (ts, raw) in enumerate(frames_with_ts):
+        fname = f"frame_{idx:02d}.jpg"
+        (ev_dir / fname).write_bytes(raw)
+        timestamps.append(ts)
+        manifest_frames.append({"index": idx + 1, "timestamp_sec": ts, "file": fname})
+
+    sheet_bytes = build_timestamped_contact_sheet(frames_with_ts)
+    if sheet_bytes:
+        (ev_dir / "contact_sheet.jpg").write_bytes(sheet_bytes)
+
+    manifest = {
+        "video_id": video_id,
+        "frame_count": len(frames_with_ts),
+        "timestamps": timestamps,
+        "frames": manifest_frames,
+        "has_contact_sheet": bool(sheet_bytes),
+    }
+    (ev_dir / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    # Also build compact base64 previews (up to 10 evenly selected frames) for UI display
+    from PIL import Image
+
+    if len(frames_with_ts) <= 10:
+        preview_items = frames_with_ts
+    else:
+        step = (len(frames_with_ts) - 1) / 9.0
+        preview_items = [frames_with_ts[round(i * step)] for i in range(10)]
+
+    previews: list[str] = []
+    preview_timestamps: list[float] = []
+    for ts, raw in preview_items:
+        try:
+            with Image.open(io.BytesIO(raw)) as im:
+                rgb = im.convert("RGB")
+                rgb.thumbnail((240, 360))
+                buf = io.BytesIO()
+                rgb.save(buf, format="JPEG", quality=66, optimize=True)
+                b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+                previews.append(f"data:image/jpeg;base64,{b64}")
+                preview_timestamps.append(ts)
+        except Exception:
+            continue
+
+    return {
+        "timestamps": preview_timestamps,
+        "all_timestamps": timestamps,
+        "previews": previews,
+        "contact_sheet_saved": bool(sheet_bytes),
+    }
+
+
+def load_source_evidence_images(
+    video_id: str,
+    media_dir: Path,
+    *,
+    max_key_frames: int = 8,
+) -> tuple[list[tuple[bytes, str]], list[float]]:
+    """Load the persisted timestamped contact sheet + representative HD keyframes for a video
+    so the AI auditor can visually verify a user's prompt against the real source footage."""
+    ev_dir = media_dir / f"source_evidence_{video_id}"
+    if not ev_dir.exists():
+        return [], []
+
+    images: list[tuple[bytes, str]] = []
+    timestamps: list[float] = []
+
+    sheet_path = ev_dir / "contact_sheet.jpg"
+    if sheet_path.exists() and sheet_path.stat().st_size > 500:
+        images.append((sheet_path.read_bytes(), "image/jpeg"))
+
+    manifest_path = ev_dir / "manifest.json"
+    frame_entries: list[dict[str, object]] = []
+    if manifest_path.exists():
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            frame_entries = list(data.get("frames") or [])
+            timestamps = [float(t) for t in (data.get("timestamps") or [])]
+        except Exception:
+            frame_entries = []
+
+    if frame_entries:
+        if len(frame_entries) <= max_key_frames:
+            picked = frame_entries
+        else:
+            step = (len(frame_entries) - 1) / max(1, max_key_frames - 1)
+            picked = [frame_entries[round(i * step)] for i in range(max_key_frames)]
+        for entry in picked:
+            fpath = ev_dir / str(entry.get("file") or "")
+            if fpath.exists() and fpath.stat().st_size > 200:
+                images.append((fpath.read_bytes(), "image/jpeg"))
+    else:
+        for fpath in sorted(ev_dir.glob("frame_*.jpg"))[:max_key_frames]:
+            if fpath.stat().st_size > 200:
+                images.append((fpath.read_bytes(), "image/jpeg"))
+
+    return images, timestamps
 
 
 def _probe_duration_sec(input_path: Path) -> float | None:

@@ -26,7 +26,7 @@ import type {
 } from "./types/radar";
 
 const DEFAULT_PARAMS: RadarFormParams = {
-  mode: "prompt_import",
+  mode: "direct_urls",
   searchStrategy: "cross_category",
   creativeStyles: [],
   platforms: ["tiktok", "instagram", "youtube"],

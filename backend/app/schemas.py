@@ -73,15 +73,27 @@ class StoryboardShot(BaseModel):
     has_person: bool = False
 
 
+class PromptAuditReport(BaseModel):
+    verdict: str = "verified"  # "accurate" | "minor_gaps" | "major_mismatch" | "verified"
+    summary: str = ""
+    matched_points: list[str] = Field(default_factory=list)
+    issues_found: list[str] = Field(default_factory=list)
+    fixes_applied: list[str] = Field(default_factory=list)
+
+
 class DirectorPlan(BaseModel):
     original_plot_summary: str = ""
     original_video_prompt_cn: str = ""
     original_video_prompt_en: str = ""
+    global_reference_prompt_cn: str = ""
+    global_reference_prompt_en: str = ""
     current_master_prompt_cn: str = ""
     current_master_prompt_en: str = ""
     negative_constraints: str = ""
+    prompt_audit_report: PromptAuditReport | None = None
     has_user_customized: bool = False
     keyframe_previews: list[str] = Field(default_factory=list)
+    keyframe_timestamps: list[float] = Field(default_factory=list)
     ai_character_profile_cn: str = ""
     ai_character_profile_en: str = ""
     product_placement_plan: str = ""
@@ -154,6 +166,9 @@ class LearnedMemoryItem(BaseModel):
 class DirectorRevisionResponse(BaseModel):
     director_reply: str = ""
     changed_shots: list[int] = Field(default_factory=list)
+    prompt_audit_report: PromptAuditReport | None = None
+    global_reference_prompt_cn: str = ""
+    global_reference_prompt_en: str = ""
     current_master_prompt_cn: str = ""
     current_master_prompt_en: str = ""
     negative_constraints: str = ""
@@ -382,6 +397,8 @@ class LockPlanRequest(BaseModel):
     locked: bool = True
     master_prompt_cn: str | None = None
     master_prompt_en: str | None = None
+    global_reference_prompt_cn: str | None = None
+    negative_constraints: str | None = None
 
 
 class GenerateVideoClipRequest(BaseModel):

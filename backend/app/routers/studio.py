@@ -65,8 +65,12 @@ from ..services.media_generator import (
     generate_product_image,
 )
 from ..services.product_parser import _resize_jpeg
-from ..services.prompts import build_director_revision_prompt, build_image_refinement_prompt
-from ..services.video_processor import is_ffmpeg_available
+from ..services.prompts import (
+    build_director_revision_prompt,
+    build_image_refinement_prompt,
+    build_prompt_audit_and_revision_prompt,
+)
+from ..services.video_processor import is_ffmpeg_available, load_source_evidence_images
 from ..services.video_stitcher import stitch_media_items_to_mp4
 
 logger = logging.getLogger(__name__)
@@ -719,6 +723,249 @@ def delete_director_memory(
     return {"ok": True}
 
 
+def _collect_source_evidence_for_audit(
+    video: VideoRecord,
+    curr_plan: dict[str, Any],
+) -> tuple[list[tuple[bytes, str]], list[float]]:
+    """Load persisted timestamped Contact Sheet + HD keyframes from disk; if unavailable
+    (e.g. legacy video record), fall back to decoding saved keyframe_previews."""
+    ev_images, ev_timestamps = load_source_evidence_images(
+        video.id, MEDIA_DIR, max_key_frames=6
+    )
+    if ev_images:
+        return ev_images, ev_timestamps
+
+    fallback_imgs: list[tuple[bytes, str]] = []
+    for raw_url in list(curr_plan.get("keyframe_previews") or [])[:6]:
+        decoded = decode_data_url_image(raw_url)
+        if decoded:
+            fallback_imgs.append(decoded)
+    fallback_ts = [float(t) for t in (curr_plan.get("keyframe_timestamps") or [])]
+    return fallback_imgs, fallback_ts
+
+
+def _merge_revision_into_analysis(
+    *,
+    curr_analysis: dict[str, Any],
+    curr_plan: dict[str, Any],
+    rev_res: DirectorRevisionResponse,
+    user_summary_text: str,
+    new_history: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if rev_res.analysis is not None:
+        updated_dict = rev_res.analysis.model_dump()
+    else:
+        updated_dict = dict(curr_analysis)
+
+    updated_plan = dict(updated_dict.get("director_plan") or curr_plan)
+    if curr_plan.get("original_video_prompt_cn"):
+        updated_plan["original_video_prompt_cn"] = curr_plan["original_video_prompt_cn"]
+    if curr_plan.get("original_video_prompt_en"):
+        updated_plan["original_video_prompt_en"] = curr_plan["original_video_prompt_en"]
+    if curr_plan.get("keyframe_previews"):
+        updated_plan["keyframe_previews"] = curr_plan["keyframe_previews"]
+    if curr_plan.get("keyframe_timestamps"):
+        updated_plan["keyframe_timestamps"] = curr_plan["keyframe_timestamps"]
+
+    if rev_res.prompt_audit_report is not None:
+        updated_plan["prompt_audit_report"] = rev_res.prompt_audit_report.model_dump()
+    if rev_res.global_reference_prompt_cn.strip():
+        updated_plan["global_reference_prompt_cn"] = rev_res.global_reference_prompt_cn.strip()
+    if rev_res.global_reference_prompt_en.strip():
+        updated_plan["global_reference_prompt_en"] = rev_res.global_reference_prompt_en.strip()
+    if rev_res.current_master_prompt_cn.strip():
+        updated_plan["current_master_prompt_cn"] = rev_res.current_master_prompt_cn.strip()
+    if rev_res.current_master_prompt_en.strip():
+        updated_plan["current_master_prompt_en"] = rev_res.current_master_prompt_en.strip()
+    if rev_res.negative_constraints.strip():
+        updated_plan["negative_constraints"] = rev_res.negative_constraints.strip()
+    if rev_res.ai_character_profile_cn.strip():
+        updated_plan["ai_character_profile_cn"] = rev_res.ai_character_profile_cn.strip()
+    if rev_res.ai_character_profile_en.strip():
+        updated_plan["ai_character_profile_en"] = rev_res.ai_character_profile_en.strip()
+
+    if not updated_plan.get("current_master_prompt_cn"):
+        updated_plan["current_master_prompt_cn"] = (
+            updated_plan.get("global_reference_prompt_cn") or user_summary_text
+        )
+
+    if rev_res.storyboard:
+        updated_dict["storyboard"] = [s.model_dump() for s in rev_res.storyboard]
+    if rev_res.chatgpt_images_prompts:
+        updated_dict["chatgpt_images_prompts"] = [
+            p.model_dump() for p in rev_res.chatgpt_images_prompts
+        ]
+    if rev_res.kling_prompts:
+        neg_default = updated_plan.get("negative_constraints") or ""
+        k_list = []
+        for k in rev_res.kling_prompts:
+            kd = k.model_dump()
+            if neg_default and not str(kd.get("negative_prompt") or "").strip():
+                kd["negative_prompt"] = neg_default
+            k_list.append(kd)
+        updated_dict["kling_prompts"] = k_list
+    if rev_res.adapted_script_cn.strip() or rev_res.adapted_script_en.strip():
+        copy_dict = dict(updated_dict.get("copywriting") or {})
+        if rev_res.adapted_script_cn.strip():
+            copy_dict["adapted_script_cn"] = rev_res.adapted_script_cn.strip()
+        if rev_res.adapted_script_en.strip():
+            copy_dict["adapted_script_en"] = rev_res.adapted_script_en.strip()
+        updated_dict["copywriting"] = copy_dict
+
+    updated_plan["has_user_customized"] = True
+    updated_plan["revision_status"] = "draft"
+    updated_plan["revision_history"] = new_history
+    updated_dict["director_plan"] = updated_plan
+    return updated_dict
+
+
+@router.post("/videos/{video_id}/audit-revise")
+async def audit_and_revise_prompt(
+    video_id: str,
+    db: Annotated[Session, Depends(get_db)],
+    reference_prompt_text: str = Form(default=""),
+    modification_notes: str = Form(default=""),
+    prompt_images: list[UploadFile] = File(default=[]),
+) -> dict[str, Any]:
+    """Frame-by-frame visual audit & 3-part prompt generator:
+    1) Loads the persisted real original video Contact Sheet + HD scene-cut keyframes.
+    2) Visually cross-checks the user's submitted reference prompt (text + up to 8 screenshots)
+       against the actual original video frames.
+    3) Applies the user's modification instructions + multi-angle product photos to produce
+       the verified 3-part production prompt package (Global Reference + Controllable Shot Table
+       + Global Constraints) directly driving Step 2 image gen & Kling I2V."""
+    ref_text = reference_prompt_text.strip()
+    mod_notes = modification_notes.strip()
+
+    prompt_shots_bytes: list[tuple[bytes, str]] = []
+    for pf in (prompt_images or [])[:8]:
+        raw = await pf.read()
+        if not raw or len(raw) < 200:
+            continue
+        resized = _resize_jpeg(raw, max_side=1400, quality=85)
+        prompt_shots_bytes.append((resized, "image/jpeg"))
+
+    if not ref_text and not mod_notes and not prompt_shots_bytes:
+        raise HTTPException(
+            status_code=400,
+            detail="请至少提供参考提示词（文字或截图）或写下你想修改的内容",
+        )
+
+    cfg = get_settings()
+    video, session = _get_video_and_session(db, video_id)
+    ai = UnifiedAIClient(cfg)
+
+    try:
+        dna = ProductDNA.model_validate(
+            session.product_dna or {"product_name": session.product_name}
+        )
+    except Exception:
+        dna = ProductDNA(product_name=session.product_name)
+
+    curr_analysis = dict(video.analysis_json or {})
+    curr_plan = dict(curr_analysis.get("director_plan") or {})
+    history = list(curr_plan.get("revision_history") or [])
+
+    memory_block = load_director_memory_block(
+        db,
+        product_name=dna.product_name,
+        category=dna.category,
+    )
+
+    source_ev_images, source_timestamps = _collect_source_evidence_for_audit(
+        video, curr_plan
+    )
+    product_refs, _ = _extract_product_ref_images(session)
+    selected_product_refs = product_refs[:3]
+
+    audit_prompt = build_prompt_audit_and_revision_prompt(
+        product_dna=dna,
+        current_analysis=curr_analysis,
+        reference_prompt_text=ref_text,
+        modification_notes=mod_notes,
+        source_frame_count=len(source_ev_images),
+        source_timestamps=source_timestamps,
+        prompt_screenshot_count=len(prompt_shots_bytes),
+        product_photo_count=len(selected_product_refs),
+        revision_history=history,
+        director_memory_block=memory_block,
+    )
+
+    combined_images: list[tuple[bytes, str]] = (
+        source_ev_images + prompt_shots_bytes + selected_product_refs
+    )
+    user_summary = mod_notes or (
+        f"核对提示词截图（{len(prompt_shots_bytes)}张）"
+        if prompt_shots_bytes
+        else ref_text[:120]
+    )
+
+    try:
+        rev_res, _usage = await ai.generate_structured(
+            prompt=audit_prompt,
+            schema_cls=DirectorRevisionResponse,
+            tier="deep",
+            images=combined_images,
+            mock_context={
+                "current_analysis": curr_analysis,
+                "user_feedback": user_summary,
+            },
+        )
+    except Exception as exc:
+        logger.exception("Prompt audit & revision failed for video %s: %s", video_id, exc)
+        raise HTTPException(
+            status_code=502, detail=f"逐帧核对并生成新版提示词失败：{exc}"
+        ) from exc
+
+    saved_memories = save_learned_memories(
+        db,
+        rev_res.learned_memories or [],
+        source_video_title=video.title or session.product_name,
+    )
+    learned_summaries = [m.rule_summary for m in saved_memories]
+
+    now_str = datetime.now(CN_TZ).strftime("%H:%M")
+    new_history = list(history)
+    new_history.append({"role": "user", "message": user_summary, "timestamp": now_str})
+    new_history.append(
+        {
+            "role": "director",
+            "message": rev_res.director_reply,
+            "changed_shots": rev_res.changed_shots,
+            "learned_memories": learned_summaries,
+            "timestamp": now_str,
+        }
+    )
+
+    updated_dict = _merge_revision_into_analysis(
+        curr_analysis=curr_analysis,
+        curr_plan=curr_plan,
+        rev_res=rev_res,
+        user_summary_text=user_summary,
+        new_history=new_history,
+    )
+
+    video.analysis_json = updated_dict
+    flag_modified(video, "analysis_json")
+    db.commit()
+    db.refresh(video)
+
+    return {
+        "ok": True,
+        "director_reply": rev_res.director_reply,
+        "prompt_audit_report": (
+            rev_res.prompt_audit_report.model_dump()
+            if rev_res.prompt_audit_report
+            else None
+        ),
+        "changed_shots": rev_res.changed_shots,
+        "learned_memories": [
+            _serialize_memory(m).model_dump(mode="json") for m in saved_memories
+        ],
+        "analysis_json": video.analysis_json,
+    }
+
+
 @router.post("/videos/{video_id}/revise-plan")
 async def revise_director_plan(
     video_id: str,
@@ -797,55 +1044,13 @@ async def revise_director_plan(
         }
     )
 
-    # Merge lean revision response cleanly back into curr_analysis so we NEVER lose
-    # keyframe_previews, original_video_prompt_cn/en, structure, or shooting_requirements!
-    if rev_res.analysis is not None:
-        updated_dict = rev_res.analysis.model_dump()
-    else:
-        updated_dict = dict(curr_analysis)
-
-    updated_plan = dict(updated_dict.get("director_plan") or curr_plan)
-    if curr_plan.get("original_video_prompt_cn"):
-        updated_plan["original_video_prompt_cn"] = curr_plan["original_video_prompt_cn"]
-    if curr_plan.get("original_video_prompt_en"):
-        updated_plan["original_video_prompt_en"] = curr_plan["original_video_prompt_en"]
-    if curr_plan.get("keyframe_previews"):
-        updated_plan["keyframe_previews"] = curr_plan["keyframe_previews"]
-
-    if rev_res.current_master_prompt_cn.strip():
-        updated_plan["current_master_prompt_cn"] = rev_res.current_master_prompt_cn.strip()
-    if rev_res.current_master_prompt_en.strip():
-        updated_plan["current_master_prompt_en"] = rev_res.current_master_prompt_en.strip()
-    if rev_res.negative_constraints.strip():
-        updated_plan["negative_constraints"] = rev_res.negative_constraints.strip()
-    if rev_res.ai_character_profile_cn.strip():
-        updated_plan["ai_character_profile_cn"] = rev_res.ai_character_profile_cn.strip()
-    if rev_res.ai_character_profile_en.strip():
-        updated_plan["ai_character_profile_en"] = rev_res.ai_character_profile_en.strip()
-
-    if not updated_plan.get("current_master_prompt_cn"):
-        updated_plan["current_master_prompt_cn"] = feedback
-
-    if rev_res.storyboard:
-        updated_dict["storyboard"] = [s.model_dump() for s in rev_res.storyboard]
-    if rev_res.chatgpt_images_prompts:
-        updated_dict["chatgpt_images_prompts"] = [
-            p.model_dump() for p in rev_res.chatgpt_images_prompts
-        ]
-    if rev_res.kling_prompts:
-        updated_dict["kling_prompts"] = [k.model_dump() for k in rev_res.kling_prompts]
-    if rev_res.adapted_script_cn.strip() or rev_res.adapted_script_en.strip():
-        copy_dict = dict(updated_dict.get("copywriting") or {})
-        if rev_res.adapted_script_cn.strip():
-            copy_dict["adapted_script_cn"] = rev_res.adapted_script_cn.strip()
-        if rev_res.adapted_script_en.strip():
-            copy_dict["adapted_script_en"] = rev_res.adapted_script_en.strip()
-        updated_dict["copywriting"] = copy_dict
-
-    updated_plan["has_user_customized"] = True
-    updated_plan["revision_status"] = "draft"
-    updated_plan["revision_history"] = new_history
-    updated_dict["director_plan"] = updated_plan
+    updated_dict = _merge_revision_into_analysis(
+        curr_analysis=curr_analysis,
+        curr_plan=curr_plan,
+        rev_res=rev_res,
+        user_summary_text=feedback,
+        new_history=new_history,
+    )
 
     video.analysis_json = updated_dict
     flag_modified(video, "analysis_json")
@@ -855,6 +1060,11 @@ async def revise_director_plan(
     return {
         "ok": True,
         "director_reply": rev_res.director_reply,
+        "prompt_audit_report": (
+            rev_res.prompt_audit_report.model_dump()
+            if rev_res.prompt_audit_report
+            else None
+        ),
         "changed_shots": rev_res.changed_shots,
         "learned_memories": [_serialize_memory(m).model_dump(mode="json") for m in saved_memories],
         "analysis_json": video.analysis_json,
@@ -876,6 +1086,11 @@ def lock_director_plan(
         plan["has_user_customized"] = True
     if body.master_prompt_en is not None and body.master_prompt_en.strip():
         plan["current_master_prompt_en"] = body.master_prompt_en.strip()
+    if body.global_reference_prompt_cn is not None and body.global_reference_prompt_cn.strip():
+        plan["global_reference_prompt_cn"] = body.global_reference_prompt_cn.strip()
+        plan["has_user_customized"] = True
+    if body.negative_constraints is not None and body.negative_constraints.strip():
+        plan["negative_constraints"] = body.negative_constraints.strip()
     plan["revision_status"] = "locked" if body.locked else "draft"
     analysis["director_plan"] = plan
     video.analysis_json = analysis
