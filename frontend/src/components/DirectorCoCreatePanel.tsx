@@ -103,9 +103,11 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
   const [expanded, setExpanded] = useState(true);
   const [showOriginalBox, setShowOriginalBox] = useState(false);
 
-  // Step 2A: Direct Product-Replaced Prompt Input -> Review ONLY
+  // Step 2A: Two-File Creative Input (File 1: Video Requirements Prompt + File 2: Storyboard Content)
   const [productReplacedPrompt, setProductReplacedPrompt] = useState("");
+  const [storyboardInputText, setStoryboardInputText] = useState("");
   const [promptFile, setPromptFile] = useState<File | null>(null);
+  const [storyboardFile, setStoryboardFile] = useState<File | null>(null);
   const [promptImages, setPromptImages] = useState<File[]>([]);
   const [reviewing, setReviewing] = useState(false);
   const [reviewError, setReviewError] = useState("");
@@ -124,6 +126,7 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
   const [manualConstraints, setManualConstraints] = useState(negativeConstraints);
 
   const promptFileInputRef = useRef<HTMLInputElement | null>(null);
+  const storyboardFileInputRef = useRef<HTMLInputElement | null>(null);
   const promptImgInputRef = useRef<HTMLInputElement | null>(null);
   const reviewBoxRef = useRef<HTMLDivElement | null>(null);
   const revisedBoxRef = useRef<HTMLDivElement | null>(null);
@@ -228,34 +231,67 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
         const text = await file.text();
         if (text.trim()) {
           setProductReplacedPrompt(text.trim());
-          onToast(`📄 已载入制作包文档：${file.name}`);
+          onToast(`📄 已载入【文件 1：视频要求提示词】：${file.name}`);
           return;
         }
       } catch {
         // Fallback to backend upload parsing
       }
     }
-    onToast(`📄 已附加制作包文档：${file.name}（提交时自动解析全文）`);
+    onToast(`📄 已附加【文件 1：视频要求提示词】：${file.name}`);
   };
 
-  // Step 2A: Compare user's product-replaced prompt vs original video -> Review Opinions ONLY
+  const handleSelectStoryboardFile = async (file: File | null) => {
+    if (!file) return;
+    setStoryboardFile(file);
+    const lower = file.name.toLowerCase();
+    if (lower.endsWith(".txt") || lower.endsWith(".md")) {
+      try {
+        const text = await file.text();
+        if (text.trim()) {
+          setStoryboardInputText(text.trim());
+          onToast(`🎬 已载入【文件 2：分镜内容】：${file.name}`);
+          return;
+        }
+      } catch {
+        // Fallback to backend upload parsing
+      }
+    }
+    onToast(`🎬 已附加【文件 2：分镜内容】：${file.name}`);
+  };
+
+  const hasAnyPromptInput = Boolean(
+    productReplacedPrompt.trim() ||
+      storyboardInputText.trim() ||
+      promptFile ||
+      storyboardFile ||
+      promptImages.length > 0
+  );
+
+  // Step 2A: Deep understanding of File 1 + File 2 -> Naturalness & Continuity Review Opinions
   const handleRunReview = async () => {
     const cleanPrompt = productReplacedPrompt.trim();
-    if (!cleanPrompt && !promptFile && promptImages.length === 0) {
-      onToast("请先粘贴你替换商品后的提示词、上传制作包文档（.txt/.md/.docx）或上传提示词截图");
+    const cleanSb = storyboardInputText.trim();
+    if (!hasAnyPromptInput) {
+      onToast("请先上传或粘贴「视频要求提示词」与「分镜内容」");
       return;
     }
     setReviewing(true);
     setReviewError("");
     setApplyError("");
     try {
-      // If .txt/.md was already loaded into the textarea, avoid sending duplicate text in both fields
-      const lowerName = (promptFile?.name || "").toLowerCase();
-      const sendFile =
-        promptFile && (lowerName.endsWith(".docx") || !cleanPrompt) ? promptFile : null;
+      const lowerReq = (promptFile?.name || "").toLowerCase();
+      const sendReqFile =
+        promptFile && (lowerReq.endsWith(".docx") || !cleanPrompt) ? promptFile : null;
+      const lowerSb = (storyboardFile?.name || "").toLowerCase();
+      const sendSbFile =
+        storyboardFile && (lowerSb.endsWith(".docx") || !cleanSb) ? storyboardFile : null;
+
       const resp = await api.reviewProductReplacedPrompt(video.id, {
         productReplacedPromptText: cleanPrompt,
-        promptFile: sendFile,
+        storyboardText: cleanSb,
+        promptFile: sendReqFile,
+        storyboardFile: sendSbFile,
         promptImages,
       });
       setReviewResult(resp.review);
@@ -264,12 +300,12 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
         defaults[s.id] = true;
       });
       setSelectedFixIds(defaults);
-      onToast("🔍 已对照原视频逐帧完成比对！请查看下方核对意见并勾选要修改的项");
+      onToast("🔍 已深度理解双文件并给出自然度与衔接优化意见，请勾选确认！");
       setTimeout(() => {
         reviewBoxRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
       }, 100);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "对照原片核对失败";
+      const msg = err instanceof Error ? err.message : "深度理解分析失败";
       setReviewError(msg);
       onToast(msg);
     } finally {
@@ -277,11 +313,12 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
     }
   };
 
-  // Step 2B: Apply ONLY the user-confirmed suggestions & split into shot-by-shot 4-part package
+  // Step 2B: Apply confirmed suggestions (or direct decompose) -> Finalize 4-Part Shot-by-Shot Package
   const handleApplyConfirmedFixes = async (skipAllSuggestions = false) => {
     const cleanPrompt = productReplacedPrompt.trim();
-    if (!cleanPrompt && !promptFile && promptImages.length === 0) {
-      onToast("请先提交你替换商品后的提示词或制作包文件");
+    const cleanSb = storyboardInputText.trim();
+    if (!hasAnyPromptInput) {
+      onToast("请先上传或粘贴「视频要求提示词」与「分镜内容」");
       return;
     }
 
@@ -297,7 +334,7 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
     let modInstruction = "";
     if (pickedLines.length > 0 || extra) {
       modInstruction = [
-        "【请严格以用户提交的“替换商品后提示词”为底稿，只修改以下用户确认采纳的意见，其余内容 100% 保留并按逐个独立镜头拆分（每次只写当前镜头动作，不重复塞入整套剧情）】：",
+        "【请以用户提交的「文件 1：视频要求提示词」+「文件 2：分镜内容」为核心权威基准，以新视频自然流畅为第一原则（不死板照搬原片），融合以下用户确认的优化意见并拆分为独立逐镜制作包】：",
         ...pickedLines,
         extra ? `- 【用户额外补充】${extra}` : "",
       ]
@@ -305,19 +342,25 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
         .join("\n");
     } else {
       modInstruction =
-        "【无需改动剧情，100% 忠实保留用户提交的“替换商品后提示词”，严格拆分为独立逐镜的关键帧生图提示词 + 可灵单镜动态提示词 + 统一约束 + 生成与剪辑重点】";
+        "【100% 深度理解并保留用户提交的「文件 1：视频要求提示词」+「文件 2：分镜内容」，以画面自然流畅为主（不强行照搬原片），精准拆分为逐镜独立的关键帧生图提示词 + 可灵单镜动态提示词 + 统一约束 + 生成与剪辑重点】";
     }
 
     setApplying(true);
     setApplyError("");
     try {
-      const lowerName = (promptFile?.name || "").toLowerCase();
-      const sendFile =
-        promptFile && (lowerName.endsWith(".docx") || !cleanPrompt) ? promptFile : null;
+      const lowerReq = (promptFile?.name || "").toLowerCase();
+      const sendReqFile =
+        promptFile && (lowerReq.endsWith(".docx") || !cleanPrompt) ? promptFile : null;
+      const lowerSb = (storyboardFile?.name || "").toLowerCase();
+      const sendSbFile =
+        storyboardFile && (lowerSb.endsWith(".docx") || !cleanSb) ? storyboardFile : null;
+
       const resp = await api.auditRevisePrompt(video.id, {
         referencePromptText: cleanPrompt,
+        storyboardText: cleanSb,
         modificationNotes: modInstruction,
-        promptFile: sendFile,
+        promptFile: sendReqFile,
+        storyboardFile: sendSbFile,
         promptImages,
       });
       setManualEditing(false);
@@ -601,55 +644,53 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
             )}
           </div>
 
-          {/* BOX 2: Directly Paste Product-Replaced Prompt (Single Clean Input -> Review Opinions First!) */}
-          <div className="bg-slate-950/95 border border-sky-500/45 rounded-xl p-4 space-y-3">
+          {/* BOX 2: Two-File Creative Input (File 1: Video Requirements Prompt + File 2: Storyboard Content) */}
+          <div className="bg-slate-950/95 border border-sky-500/45 rounded-xl p-4 space-y-3.5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="px-2.5 py-0.5 rounded-md font-bold text-[11px] bg-amber-500/20 border border-amber-500/40 text-amber-200">
-                ② 直接贴入你「替换商品后」的提示词（可一次性粘全部分镜，或上传截图）
+                ② 上传两个文件（视频要求提示词 + 分镜内容）→ 参照原片思路，深度理解并自然拆镜
               </span>
               <span className="text-[11px] text-slate-400">
-                无需复制原视频提示词 · 先由 AI 对照原片逐帧给意见
+                不强制死板复刻原片 · 以新视频自然流畅、物理连贯为第一原则
               </span>
             </div>
 
             {reviewError && (
               <div className="rounded-xl bg-rose-500/15 border border-rose-500/40 px-3 py-2 text-xs text-rose-200">
-                逐帧比对失败：{reviewError}（请重试）
+                深度理解分析失败：{reviewError}（请重试）
               </div>
             )}
 
-            <textarea
-              rows={7}
-              value={productReplacedPrompt}
-              onChange={(e) => setProductReplacedPrompt(e.target.value)}
-              placeholder="直接把你替换好商品的完整提示词（全片统一参考 + 全部分镜提示词 + 统一约束）一次性粘贴在这里即可；下方也可补充上传提示词截图..."
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 focus:border-sky-400 focus:outline-none text-xs sm:text-sm text-slate-100 placeholder-slate-500 leading-relaxed"
-            />
-
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => promptFileInputRef.current?.click()}
-                  className="px-3 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-dashed border-emerald-400/60 text-[11px] text-emerald-200 font-semibold inline-flex items-center gap-1.5"
-                >
-                  <FileText className="w-3.5 h-3.5 text-emerald-400" />
-                  上传制作包文件（.txt / .md / .docx）
-                </button>
-                <input
-                  ref={promptFileInputRef}
-                  type="file"
-                  accept=".txt,.md,.docx,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                  className="hidden"
-                  onChange={(e) => {
-                    handleSelectPromptFile(e.target.files?.[0] || null);
-                    e.target.value = "";
-                  }}
-                />
-                {promptFile && (
-                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-emerald-950/60 border border-emerald-500/40 text-[11px] text-emerald-200">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+              {/* Slot 1: Video Requirements Prompt */}
+              <div className="bg-slate-900/50 border border-emerald-500/30 rounded-xl p-3 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                  <span className="text-xs font-bold text-emerald-300">
+                    📄 文件 1：视频要求提示词
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => promptFileInputRef.current?.click()}
+                    className="px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-dashed border-emerald-400/60 text-[11px] text-emerald-200 font-semibold inline-flex items-center gap-1"
+                  >
                     <FileText className="w-3 h-3 text-emerald-400" />
-                    <span className="max-w-[160px] truncate">{promptFile.name}</span>
+                    上传文件（.txt / .md / .docx）
+                  </button>
+                  <input
+                    ref={promptFileInputRef}
+                    type="file"
+                    accept=".txt,.md,.docx,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    className="hidden"
+                    onChange={(e) => {
+                      handleSelectPromptFile(e.target.files?.[0] || null);
+                      e.target.value = "";
+                    }}
+                  />
+                </div>
+                {promptFile && (
+                  <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-950/70 border border-emerald-500/40 text-[11px] text-emerald-200">
+                    <FileText className="w-3 h-3 text-emerald-400" />
+                    <span className="max-w-[200px] truncate">{promptFile.name}</span>
                     <button
                       type="button"
                       onClick={() => setPromptFile(null)}
@@ -657,15 +698,74 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                     >
                       <X className="w-3 h-3" />
                     </button>
-                  </span>
+                  </div>
                 )}
+                <textarea
+                  rows={5}
+                  value={productReplacedPrompt}
+                  onChange={(e) => setProductReplacedPrompt(e.target.value)}
+                  placeholder="上传「视频要求提示词」文件后会自动显示在这里，也可直接粘贴（包含：全片风格、产品一致性、人物与场景设定、排除要求、声音与剪辑思路）..."
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 focus:border-emerald-400 focus:outline-none text-xs text-slate-100 placeholder-slate-500 leading-relaxed"
+                />
+              </div>
+
+              {/* Slot 2: Storyboard Content */}
+              <div className="bg-slate-900/50 border border-sky-500/30 rounded-xl p-3 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-1.5">
+                  <span className="text-xs font-bold text-sky-300">
+                    🎬 文件 2：分镜内容
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => storyboardFileInputRef.current?.click()}
+                    className="px-2.5 py-1 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-dashed border-sky-400/60 text-[11px] text-sky-200 font-semibold inline-flex items-center gap-1"
+                  >
+                    <Film className="w-3 h-3 text-sky-400" />
+                    上传文件（.txt / .md / .docx）
+                  </button>
+                  <input
+                    ref={storyboardFileInputRef}
+                    type="file"
+                    accept=".txt,.md,.docx,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    className="hidden"
+                    onChange={(e) => {
+                      handleSelectStoryboardFile(e.target.files?.[0] || null);
+                      e.target.value = "";
+                    }}
+                  />
+                </div>
+                {storyboardFile && (
+                  <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-sky-950/70 border border-sky-500/40 text-[11px] text-sky-200">
+                    <Film className="w-3 h-3 text-sky-400" />
+                    <span className="max-w-[200px] truncate">{storyboardFile.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => setStoryboardFile(null)}
+                      className="text-sky-300/80 hover:text-rose-400"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                )}
+                <textarea
+                  rows={5}
+                  value={storyboardInputText}
+                  onChange={(e) => setStoryboardInputText(e.target.value)}
+                  placeholder="上传「分镜内容」文件后会自动显示在这里，也可直接粘贴（包含：镜头 1、镜头 2... 的关键帧图片内容、图生视频动态提示词与建议时长）..."
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 focus:border-sky-400 focus:outline-none text-xs text-slate-100 placeholder-slate-500 leading-relaxed"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={() => promptImgInputRef.current?.click()}
-                  className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-dashed border-sky-500/50 text-[11px] text-sky-200 font-semibold inline-flex items-center gap-1.5"
+                  className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-dashed border-slate-700 text-[11px] text-slate-300 inline-flex items-center gap-1.5"
                 >
                   <ImagePlus className="w-3.5 h-3.5 text-sky-400" />
-                  上传提示词截图（{promptImages.length}/8）
+                  补充截图（可选 {promptImages.length}/8）
                 </button>
                 <input
                   ref={promptImgInputRef}
@@ -699,24 +799,36 @@ export const DirectorCoCreatePanel: React.FC<Props> = ({
                 )}
               </div>
 
-              <button
-                type="button"
-                disabled={
-                  reviewing ||
-                  (!productReplacedPrompt.trim() && !promptFile && promptImages.length === 0)
-                }
-                onClick={handleRunReview}
-                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-sky-500 to-cyan-400 hover:from-sky-400 hover:to-cyan-300 disabled:opacity-50 text-slate-950 font-bold text-xs inline-flex items-center gap-1.5 shadow-lg shadow-sky-500/20"
-              >
-                {reviewing ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <SearchCheck className="w-4 h-4" />
-                )}
-                {reviewing
-                  ? "正在对照原视频逐帧比对..."
-                  : "🔍 对照原片逐帧比对，给我修改意见"}
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={applying || reviewing || !hasAnyPromptInput}
+                  onClick={() => handleApplyConfirmedFixes(true)}
+                  className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-emerald-500/40 disabled:opacity-50 text-emerald-200 font-bold text-xs inline-flex items-center gap-1.5"
+                >
+                  {applying ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Sparkles className="w-4 h-4 text-emerald-400" />
+                  )}
+                  直接深度拆解为逐镜制作包
+                </button>
+                <button
+                  type="button"
+                  disabled={reviewing || applying || !hasAnyPromptInput}
+                  onClick={handleRunReview}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-sky-500 to-cyan-400 hover:from-sky-400 hover:to-cyan-300 disabled:opacity-50 text-slate-950 font-bold text-xs inline-flex items-center gap-1.5 shadow-lg shadow-sky-500/20"
+                >
+                  {reviewing ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <SearchCheck className="w-4 h-4" />
+                  )}
+                  {reviewing
+                    ? "正在深度理解双文件..."
+                    : "🔍 深度理解双文件，先给自然度优化意见"}
+                </button>
+              </div>
             </div>
           </div>
 

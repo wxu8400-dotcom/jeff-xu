@@ -39,6 +39,9 @@ const DEFAULT_PARAMS: RadarFormParams = {
   directUrls: "",
   promptImages: [],
   promptText: "",
+  storyboardText: "",
+  requirementsFile: null,
+  storyboardFile: null,
 };
 
 export default function App() {
@@ -217,8 +220,14 @@ export default function App() {
   const handleStartScan = async () => {
     setFormError("");
     if (params.mode === "prompt_import") {
-      if (params.promptImages.length === 0 && !params.promptText.trim()) {
-        setFormError("请至少上传 1 张提示词截图（如 Codex 截图），或粘贴提示词文本");
+      if (
+        params.promptImages.length === 0 &&
+        !params.promptText.trim() &&
+        !params.storyboardText.trim() &&
+        !params.requirementsFile &&
+        !params.storyboardFile
+      ) {
+        setFormError("请上传「视频要求提示词」和/或「分镜内容」文件（或粘贴文本/上传截图）");
         return;
       }
     } else {
@@ -243,6 +252,20 @@ export default function App() {
       if (params.mode === "prompt_import") {
         params.promptImages.forEach((img) => fd.append("prompt_images", img));
         fd.append("prompt_text", params.promptText);
+        fd.append("storyboard_text", params.storyboardText);
+        if (
+          params.requirementsFile &&
+          (params.requirementsFile.name.toLowerCase().endsWith(".docx") || !params.promptText.trim())
+        ) {
+          fd.append("requirements_file", params.requirementsFile);
+        }
+        if (
+          params.storyboardFile &&
+          (params.storyboardFile.name.toLowerCase().endsWith(".docx") ||
+            !params.storyboardText.trim())
+        ) {
+          fd.append("storyboard_file", params.storyboardFile);
+        }
         resp = await api.startPromptImport(fd);
       } else if (params.mode === "direct_urls") {
         fd.append("user_instruction", params.userInstruction);

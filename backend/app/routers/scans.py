@@ -260,21 +260,51 @@ async def create_direct_url_scan(
 async def create_prompt_import_scan(
     db: Annotated[Session, Depends(get_db)],
     files: list[UploadFile] | None = File(default=None),
+    requirements_file: UploadFile | None = File(default=None),
+    storyboard_file: UploadFile | None = File(default=None),
     prompt_images: list[UploadFile] | None = File(default=None),
     prompt_text: str = Form(default=""),
+    storyboard_text: str = Form(default=""),
     product_text: str = Form(default=""),
     product_name_override: str = Form(default=""),
 ) -> dict[str, str]:
-    """Import finalized prompt screenshots (e.g. from Codex) and/or pasted prompt text
-    alongside multi-angle product photos to jump directly into image & Kling video generation."""
+    """Import two structured creative files (File 1: Video Requirements Prompt + File 2: Storyboard Content),
+    pasted text, and/or prompt screenshots alongside multi-angle product photos to deeply decompose
+    into shot-by-shot image & Kling video generation."""
+    from .studio import _extract_prompt_doc_bytes_text
+
     raw_product_files = await _read_uploads(files)
     raw_prompt_imgs = await _read_uploads(prompt_images)
-    clean_prompt_text = prompt_text.strip()
+
+    req_parts: list[str] = []
+    if requirements_file is not None and requirements_file.filename:
+        raw_req = await requirements_file.read()
+        txt_req = _extract_prompt_doc_bytes_text(requirements_file.filename, raw_req)
+        if txt_req:
+            req_parts.append(txt_req)
+    if prompt_text.strip():
+        req_parts.append(prompt_text.strip())
+
+    sb_parts: list[str] = []
+    if storyboard_file is not None and storyboard_file.filename:
+        raw_sb = await storyboard_file.read()
+        txt_sb = _extract_prompt_doc_bytes_text(storyboard_file.filename, raw_sb)
+        if txt_sb:
+            sb_parts.append(txt_sb)
+    if storyboard_text.strip():
+        sb_parts.append(storyboard_text.strip())
+
+    combined_sections: list[str] = []
+    if req_parts:
+        combined_sections.append("【文件 1：视频要求提示词】\n" + "\n\n".join(req_parts))
+    if sb_parts:
+        combined_sections.append("【文件 2：分镜内容】\n" + "\n\n".join(sb_parts))
+    clean_prompt_text = "\n\n".join(combined_sections).strip()
 
     if not raw_prompt_imgs and not clean_prompt_text:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="请上传至少 1 张提示词截图，或直接粘贴提示词文本",
+            detail="请上传「视频要求提示词」和/或「分镜内容」文件（或粘贴文本/上传截图）",
         )
 
     product_bundle = await asyncio.to_thread(

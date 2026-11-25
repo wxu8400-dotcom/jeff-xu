@@ -953,19 +953,41 @@ async def review_product_replaced_prompt(
     video_id: str,
     db: Annotated[Session, Depends(get_db)],
     product_replaced_prompt_text: str = Form(default=""),
+    storyboard_text: str = Form(default=""),
     prompt_file: UploadFile | None = File(default=None),
+    storyboard_file: UploadFile | None = File(default=None),
     prompt_images: list[UploadFile] = File(default=[]),
 ) -> dict[str, Any]:
-    """Step 2A (Review ONLY): User directly submits their ALREADY product-replaced prompt
-    (text, .txt/.md/.docx production pack file, and/or screenshots). Compare it against the
-    persisted original video frames + original video prompt + uploaded product photos and return
-    structured review opinions + editing guidelines WITHOUT overwriting the finalized plan yet."""
-    prompt_text = product_replaced_prompt_text.strip()
+    """Step 2A (Deep Understanding & Review ONLY): User provides two core inputs:
+    1) Video Requirements Prompt (file and/or text)
+    2) Storyboard Content (file and/or text)
+    (Plus optional screenshots.) AI deeply understands both files with reference to the original
+    video's creative direction (NOT forcing rigid 1:1 copying), focusing on natural motion,
+    continuity, and controllability, returning checkable suggestions + editing guidelines."""
+    req_parts: list[str] = []
     if prompt_file is not None and prompt_file.filename:
         doc_raw = await prompt_file.read()
         doc_text = _extract_prompt_doc_bytes_text(prompt_file.filename, doc_raw)
         if doc_text:
-            prompt_text = f"{doc_text}\n\n{prompt_text}".strip() if prompt_text else doc_text
+            req_parts.append(doc_text)
+    if product_replaced_prompt_text.strip():
+        req_parts.append(product_replaced_prompt_text.strip())
+
+    sb_parts: list[str] = []
+    if storyboard_file is not None and storyboard_file.filename:
+        sb_raw = await storyboard_file.read()
+        sb_text = _extract_prompt_doc_bytes_text(storyboard_file.filename, sb_raw)
+        if sb_text:
+            sb_parts.append(sb_text)
+    if storyboard_text.strip():
+        sb_parts.append(storyboard_text.strip())
+
+    sections: list[str] = []
+    if req_parts:
+        sections.append("【文件 1：视频要求提示词】\n" + "\n\n".join(req_parts))
+    if sb_parts:
+        sections.append("【文件 2：分镜内容】\n" + "\n\n".join(sb_parts))
+    prompt_text = "\n\n".join(sections).strip()
 
     prompt_shots_bytes: list[tuple[bytes, str]] = []
     for pf in (prompt_images or [])[:8]:
@@ -978,7 +1000,7 @@ async def review_product_replaced_prompt(
     if not prompt_text and not prompt_shots_bytes:
         raise HTTPException(
             status_code=400,
-            detail="请先粘贴你替换商品后的提示词、上传制作包文件（.txt/.md/.docx）或上传提示词截图",
+            detail="请上传「视频要求提示词」和/或「分镜内容」文件（或直接粘贴文本/上传截图）",
         )
 
     cfg = get_settings()
@@ -1039,23 +1061,40 @@ async def audit_and_revise_prompt(
     video_id: str,
     db: Annotated[Session, Depends(get_db)],
     reference_prompt_text: str = Form(default=""),
+    storyboard_text: str = Form(default=""),
     modification_notes: str = Form(default=""),
     prompt_file: UploadFile | None = File(default=None),
+    storyboard_file: UploadFile | None = File(default=None),
     prompt_images: list[UploadFile] = File(default=[]),
 ) -> dict[str, Any]:
-    """Frame-by-frame visual audit & 4-part prompt generator:
-    1) Loads the persisted real original video Contact Sheet + HD scene-cut keyframes.
-    2) Visually cross-checks the user's submitted reference prompt (text, .txt/.md/.docx file,
-       and/or up to 8 screenshots) against the actual original video frames.
-    3) Applies the user's modification instructions + multi-angle product photos to produce
-       the verified 4-part production prompt package (Global Reference + Controllable Shot Table
-       + Global Constraints + Editing Guidelines) directly driving Step 2 image gen & Kling I2V."""
-    ref_text = reference_prompt_text.strip()
+    """Deep 2-file understanding & 4-part controllable shot decomposition:
+    Ingests File 1 (Video Requirements Prompt) + File 2 (Storyboard Content) + optional screenshots
+    + product photos (+ source video inspiration frames), and produces a natural, shot-isolated
+    4-part production package ready for sequential image & Kling generation."""
+    req_parts: list[str] = []
     if prompt_file is not None and prompt_file.filename:
         doc_raw = await prompt_file.read()
         doc_text = _extract_prompt_doc_bytes_text(prompt_file.filename, doc_raw)
         if doc_text:
-            ref_text = f"{doc_text}\n\n{ref_text}".strip() if ref_text else doc_text
+            req_parts.append(doc_text)
+    if reference_prompt_text.strip():
+        req_parts.append(reference_prompt_text.strip())
+
+    sb_parts: list[str] = []
+    if storyboard_file is not None and storyboard_file.filename:
+        sb_raw = await storyboard_file.read()
+        sb_text = _extract_prompt_doc_bytes_text(storyboard_file.filename, sb_raw)
+        if sb_text:
+            sb_parts.append(sb_text)
+    if storyboard_text.strip():
+        sb_parts.append(storyboard_text.strip())
+
+    sections: list[str] = []
+    if req_parts:
+        sections.append("【文件 1：视频要求提示词】\n" + "\n\n".join(req_parts))
+    if sb_parts:
+        sections.append("【文件 2：分镜内容】\n" + "\n\n".join(sb_parts))
+    ref_text = "\n\n".join(sections).strip()
     mod_notes = modification_notes.strip()
 
     prompt_shots_bytes: list[tuple[bytes, str]] = []

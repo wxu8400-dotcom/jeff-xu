@@ -140,7 +140,9 @@ export const api = {
     videoId: string,
     payload: {
       productReplacedPromptText?: string;
+      storyboardText?: string;
       promptFile?: File | null;
+      storyboardFile?: File | null;
       promptImages?: File[];
     }
   ) => {
@@ -148,8 +150,14 @@ export const api = {
     if (payload.productReplacedPromptText) {
       fd.append("product_replaced_prompt_text", payload.productReplacedPromptText);
     }
+    if (payload.storyboardText) {
+      fd.append("storyboard_text", payload.storyboardText);
+    }
     if (payload.promptFile) {
       fd.append("prompt_file", payload.promptFile);
+    }
+    if (payload.storyboardFile) {
+      fd.append("storyboard_file", payload.storyboardFile);
     }
     for (const file of payload.promptImages || []) {
       fd.append("prompt_images", file);
@@ -167,8 +175,10 @@ export const api = {
     videoId: string,
     payload: {
       referencePromptText?: string;
+      storyboardText?: string;
       modificationNotes?: string;
       promptFile?: File | null;
+      storyboardFile?: File | null;
       promptImages?: File[];
     }
   ) => {
@@ -176,11 +186,17 @@ export const api = {
     if (payload.referencePromptText) {
       fd.append("reference_prompt_text", payload.referencePromptText);
     }
+    if (payload.storyboardText) {
+      fd.append("storyboard_text", payload.storyboardText);
+    }
     if (payload.modificationNotes) {
       fd.append("modification_notes", payload.modificationNotes);
     }
     if (payload.promptFile) {
       fd.append("prompt_file", payload.promptFile);
+    }
+    if (payload.storyboardFile) {
+      fd.append("storyboard_file", payload.storyboardFile);
     }
     for (const file of payload.promptImages || []) {
       fd.append("prompt_images", file);

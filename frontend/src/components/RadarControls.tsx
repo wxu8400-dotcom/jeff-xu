@@ -1,5 +1,5 @@
 import React, { useRef } from "react";
-import { ImagePlus, Link2, Radar, Sparkles, X } from "lucide-react";
+import { FileText, Film, ImagePlus, Link2, Radar, Sparkles, X } from "lucide-react";
 
 export interface RadarFormParams {
   mode: "prompt_import" | "direct_urls" | "radar";
@@ -15,6 +15,9 @@ export interface RadarFormParams {
   directUrls: string;
   promptImages: File[];
   promptText: string;
+  storyboardText: string;
+  requirementsFile: File | null;
+  storyboardFile: File | null;
 }
 
 interface Props {
@@ -46,6 +49,38 @@ export const RadarControls: React.FC<Props> = ({
   onSubmit,
 }) => {
   const promptImgRef = useRef<HTMLInputElement | null>(null);
+  const reqFileRef = useRef<HTMLInputElement | null>(null);
+  const sbFileRef = useRef<HTMLInputElement | null>(null);
+
+  const handleSelectReqFile = async (file: File | null) => {
+    if (!file) return;
+    let text = params.promptText;
+    const lower = file.name.toLowerCase();
+    if (lower.endsWith(".txt") || lower.endsWith(".md")) {
+      try {
+        const read = await file.text();
+        if (read.trim()) text = read.trim();
+      } catch {
+        // backend parses fallback
+      }
+    }
+    onChange({ ...params, requirementsFile: file, promptText: text });
+  };
+
+  const handleSelectSbFile = async (file: File | null) => {
+    if (!file) return;
+    let text = params.storyboardText;
+    const lower = file.name.toLowerCase();
+    if (lower.endsWith(".txt") || lower.endsWith(".md")) {
+      try {
+        const read = await file.text();
+        if (read.trim()) text = read.trim();
+      } catch {
+        // backend parses fallback
+      }
+    }
+    onChange({ ...params, storyboardFile: file, storyboardText: text });
+  };
 
   const addPromptImages = (incoming: FileList | null) => {
     if (!incoming) return;
@@ -105,14 +140,14 @@ export const RadarControls: React.FC<Props> = ({
         <button
           type="button"
           onClick={() => onChange({ ...params, mode: "prompt_import" })}
-          className={`flex-1 sm:flex-none px-4 py-2 rounded-xl text-xs sm:text-sm font-medium flex items-center justify-center gap-1.5 border transition ${
+          className={`flex-1 sm:flex-none px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center gap-1.5 border transition ${
             params.mode === "prompt_import"
               ? "bg-emerald-500/20 border-emerald-400 text-emerald-200"
               : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
           }`}
         >
-          <ImagePlus className="w-4 h-4" />
-          纯提示词截图直出
+          <FileText className="w-4 h-4" />
+          📄 双文件创作直出（要求 + 分镜）
         </button>
         <button
           type="button"
@@ -129,34 +164,123 @@ export const RadarControls: React.FC<Props> = ({
       </div>
 
       {params.mode === "prompt_import" ? (
-        <div className="space-y-3 bg-emerald-950/15 border border-emerald-500/30 rounded-2xl p-4">
-          <div className="space-y-1.5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <label className="block text-xs font-bold text-emerald-200">
-                上传 Codex / 外部工具生成的提示词截图（可一次多选 1~10 张长截图，按顺序上传）
-              </label>
-              <span className="text-[11px] text-emerald-300/90">
-                ✓ 100% 忠实照截图执行，不擅自魔改剧情，直接进入生图 & 可灵视频制作
-              </span>
+        <div className="space-y-3.5 bg-emerald-950/15 border border-emerald-500/30 rounded-2xl p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-bold text-emerald-200">
+              上传你的两个创作文件（视频要求提示词 + 分镜内容），AI 深度理解并自然拆解为逐镜制作包
+            </span>
+            <span className="text-[11px] text-emerald-300/90">
+              ✓ 支持 .txt / .md / .docx 或直接粘贴，不强制照搬原片，保证新视频自然流畅
+            </span>
+          </div>
+
+          {/* Two-File Upload Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            {/* File 1: Video Requirements Prompt */}
+            <div className="bg-slate-950/80 border border-emerald-500/30 rounded-xl p-3 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-1.5">
+                <span className="text-xs font-bold text-emerald-300">
+                  📄 文件 1：视频要求提示词
+                </span>
+                <button
+                  type="button"
+                  onClick={() => reqFileRef.current?.click()}
+                  className="px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-dashed border-emerald-400/60 text-[11px] text-emerald-200 font-semibold inline-flex items-center gap-1"
+                >
+                  <FileText className="w-3 h-3 text-emerald-400" />
+                  选择文件（.txt/.md/.docx）
+                </button>
+                <input
+                  ref={reqFileRef}
+                  type="file"
+                  accept=".txt,.md,.docx,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  className="hidden"
+                  onChange={(e) => {
+                    handleSelectReqFile(e.target.files?.[0] || null);
+                    e.target.value = "";
+                  }}
+                />
+              </div>
+              {params.requirementsFile && (
+                <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-950/70 border border-emerald-500/40 text-[11px] text-emerald-200">
+                  <FileText className="w-3 h-3 text-emerald-400" />
+                  <span className="max-w-[180px] truncate">{params.requirementsFile.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => onChange({ ...params, requirementsFile: null })}
+                    className="text-emerald-300/80 hover:text-rose-400"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              )}
+              <textarea
+                rows={4}
+                value={params.promptText}
+                onChange={(e) => onChange({ ...params, promptText: e.target.value })}
+                placeholder="上传文件 1 后会自动显示，也可直接粘贴（全片风格、产品要求、人物场景设定、排除约束、剪辑与声音思路）..."
+                className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 focus:border-emerald-400 focus:outline-none text-xs text-slate-100 placeholder-slate-500 leading-relaxed"
+              />
             </div>
 
-            <div
-              onClick={() => promptImgRef.current?.click()}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={(e) => {
-                e.preventDefault();
-                addPromptImages(e.dataTransfer.files);
-              }}
-              className="cursor-pointer px-4 py-4 rounded-xl bg-slate-950/90 border border-dashed border-emerald-500/50 hover:border-emerald-400 text-xs sm:text-sm text-emerald-100 flex flex-col items-center justify-center gap-1.5 transition"
-            >
-              <ImagePlus className="w-5 h-5 text-emerald-400" />
-              <span className="font-semibold">
-                点击多选或拖入提示词截图（支持 PNG / JPG，最多 10 张）
-              </span>
-              <span className="text-[11px] text-slate-400">
-                提示词截图与上方商品图严格分离：上方传商品实拍图，这里传 Codex 提示词截图
-              </span>
+            {/* File 2: Storyboard Content */}
+            <div className="bg-slate-950/80 border border-sky-500/30 rounded-xl p-3 space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-1.5">
+                <span className="text-xs font-bold text-sky-300">
+                  🎬 文件 2：分镜内容
+                </span>
+                <button
+                  type="button"
+                  onClick={() => sbFileRef.current?.click()}
+                  className="px-2.5 py-1 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 border border-dashed border-sky-400/60 text-[11px] text-sky-200 font-semibold inline-flex items-center gap-1"
+                >
+                  <Film className="w-3 h-3 text-sky-400" />
+                  选择文件（.txt/.md/.docx）
+                </button>
+                <input
+                  ref={sbFileRef}
+                  type="file"
+                  accept=".txt,.md,.docx,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                  className="hidden"
+                  onChange={(e) => {
+                    handleSelectSbFile(e.target.files?.[0] || null);
+                    e.target.value = "";
+                  }}
+                />
+              </div>
+              {params.storyboardFile && (
+                <div className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-sky-950/70 border border-sky-500/40 text-[11px] text-sky-200">
+                  <Film className="w-3 h-3 text-sky-400" />
+                  <span className="max-w-[180px] truncate">{params.storyboardFile.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => onChange({ ...params, storyboardFile: null })}
+                    className="text-sky-300/80 hover:text-rose-400"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              )}
+              <textarea
+                rows={4}
+                value={params.storyboardText}
+                onChange={(e) => onChange({ ...params, storyboardText: e.target.value })}
+                placeholder="上传文件 2 后会自动显示，也可直接粘贴（镜头 1、镜头 2... 的关键帧图片内容、图生视频动态提示词与建议时长）..."
+                className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 focus:border-sky-400 focus:outline-none text-xs text-slate-100 placeholder-slate-500 leading-relaxed"
+              />
             </div>
+          </div>
+
+          {/* Optional Prompt Screenshots */}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => promptImgRef.current?.click()}
+              className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-dashed border-slate-700 text-[11px] text-slate-300 inline-flex items-center gap-1.5"
+            >
+              <ImagePlus className="w-3.5 h-3.5 text-emerald-400" />
+              补充上传提示词截图（可选 {params.promptImages.length}/10）
+            </button>
             <input
               ref={promptImgRef}
               type="file"
@@ -168,42 +292,21 @@ export const RadarControls: React.FC<Props> = ({
                 e.target.value = "";
               }}
             />
-
-            {params.promptImages.length > 0 && (
-              <div className="flex flex-wrap gap-2 pt-1.5">
-                {params.promptImages.map((imgFile, idx) => (
-                  <div
-                    key={`${imgFile.name}-${idx}`}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-emerald-500/40 text-xs text-emerald-100"
-                  >
-                    <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold text-[10px]">
-                      截图 {idx + 1}
-                    </span>
-                    <span className="max-w-[160px] truncate">{imgFile.name}</span>
-                    <button
-                      type="button"
-                      onClick={() => removePromptImage(idx)}
-                      className="text-slate-400 hover:text-rose-400"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-1">
-            <label className="block text-xs font-medium text-slate-300">
-              或直接粘贴提示词全文（可选，可单独粘贴文字，也可与上方截图同时使用）
-            </label>
-            <textarea
-              rows={4}
-              value={params.promptText}
-              onChange={(e) => onChange({ ...params, promptText: e.target.value })}
-              placeholder="也可以直接把 Codex 生成的完整提示词（含【产品一致性】【0-3秒】...【统一排除要求】）整段粘贴在这里..."
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 focus:border-emerald-400 focus:outline-none text-xs sm:text-sm text-slate-100 placeholder-slate-500 leading-relaxed"
-            />
+            {params.promptImages.map((imgFile, idx) => (
+              <span
+                key={`${imgFile.name}-${idx}`}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-900 border border-emerald-500/40 text-[11px] text-emerald-100"
+              >
+                <span className="max-w-[140px] truncate">{imgFile.name}</span>
+                <button
+                  type="button"
+                  onClick={() => removePromptImage(idx)}
+                  className="text-slate-400 hover:text-rose-400"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            ))}
           </div>
         </div>
       ) : params.mode === "radar" ? (

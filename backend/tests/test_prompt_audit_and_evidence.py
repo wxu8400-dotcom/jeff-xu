@@ -212,3 +212,30 @@ def test_audit_revise_endpoint_with_screenshots_and_3part_output(make_client) ->
         assert locked_plan["revision_status"] == "locked"
         assert locked_plan["global_reference_prompt_cn"] == "已手动确认的全片统一参考提示词"
         assert locked_plan["negative_constraints"] == "避免换款、避免穿模、无水印"
+
+        # 4. Also verify 2-file direct creative creation (/api/scans/from-prompts)
+        two_file_resp = client.post(
+            "/api/scans/from-prompts",
+            data={"product_name_override": "焦糖橙真皮沙发"},
+            files=[
+                ("files", ("sofa.jpg", _make_sample_jpeg((210, 110, 30)), "image/jpeg")),
+                (
+                    "requirements_file",
+                    (
+                        "video_requirements.txt",
+                        "9:16 竖屏写实高端家居广告，画面自然流畅，不死板照搬原片。".encode("utf-8"),
+                        "text/plain",
+                    ),
+                ),
+                (
+                    "storyboard_file",
+                    (
+                        "storyboard.docx",
+                        _make_sample_docx("镜头1（约3秒）：展示皮料；镜头2（约3秒）：成品沙发自然呈现"),
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    ),
+                ),
+            ],
+        )
+        assert two_file_resp.status_code == 200, two_file_resp.text
+        assert two_file_resp.json()["session_id"]
